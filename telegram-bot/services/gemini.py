@@ -4,30 +4,28 @@ import logging
 import os
 import re
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Список допустимых id категорий
 VALID_CATEGORIES = [
     "food", "groceries", "transport", "entertainment",
     "health", "clothes", "home", "communication", "gifts", "other"
 ]
 
 
-def _get_model() -> genai.GenerativeModel:
-    """Инициализирует Gemini и возвращает модель."""
+def _get_client() -> genai.Client:
+    """Создаёт и возвращает клиент Gemini."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY не найден в переменных окружения")
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.0-flash")
+    return genai.Client(api_key=api_key)
 
 
 def _extract_json(text: str) -> dict:
     """Извлекает JSON из ответа модели — убирает markdown-обёртку если есть."""
-    # Убираем блоки ```json ... ``` или ``` ... ```
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```\s*", "", text)
     return json.loads(text.strip())
@@ -71,11 +69,13 @@ async def categorize_text_transaction(user_message: str) -> dict:
 }}"""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
+        client = _get_client()
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
         result = _extract_json(response.text)
 
-        # Валидируем результат
         if result.get("success"):
             if result.get("category") not in VALID_CATEGORIES:
                 result["category"] = "other"
@@ -94,7 +94,7 @@ async def categorize_text_transaction(user_message: str) -> dict:
 
 async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
     """
-    Отправляет фото чека в Gemini Vision для распознавания.
+    Отправляет фото чека в Gemini для распознавания.
     Возвращает dict: {amount, category, merchant, description, success} или {success: False, reason}.
     """
     prompt = """Ты — AI-помощник для распознавания чеков. На фото — чек о покупке.
@@ -124,13 +124,18 @@ food, groceries, transport, entertainment, health, clothes, home, communication,
 }"""
 
     try:
-        model = _get_model()
-        # Преобразуем байты в PIL Image для отправки в Gemini Vision
+        client = _get_client()
         image = Image.open(io.BytesIO(photo_bytes))
-        response = model.generate_content([prompt, image])
+
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[
+                prompt,
+                image,
+            ],
+        )
         result = _extract_json(response.text)
 
-        # Корректируем невалидную категорию
         if result.get("success") and result.get("category") not in VALID_CATEGORIES:
             result["category"] = "other"
 
@@ -155,7 +160,6 @@ async def ask_financial_advisor(
     """
     from datetime import datetime, timedelta
 
-    # Формируем список транзакций (последние 100)
     if transactions:
         transactions_list = "\n".join([
             f"- {t['datetime'][:10]}: {t.get('description', '—')} | "
@@ -165,7 +169,6 @@ async def ask_financial_advisor(
     else:
         transactions_list = "Транзакций пока нет"
 
-    # Считаем статистику по категориям за последние 30 дней
     month_ago = datetime.now() - timedelta(days=30)
     categories_totals: dict[str, float] = {}
     for t in transactions:
@@ -209,8 +212,11 @@ async def ask_financial_advisor(
 Дай развёрнутый ответ (3-7 предложений), который реально поможет пользователю. Если данных мало — честно скажи об этом. Если уместно — дай конкретный совет или рекомендацию."""
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
+        client = _get_client()
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
         return response.text.strip()
     except Exception as e:
         logger.error(f"Ошибка при запросе к AI-финансисту: {e}")
