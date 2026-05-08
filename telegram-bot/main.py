@@ -17,6 +17,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from handlers import start, transactions, stats, ai_advisor
 from api.server import app as fastapi_app
+from services.storage import init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +63,7 @@ async def run_api():
 
 async def main():
     """Запускает бот и FastAPI-сервер параллельно в одном event loop."""
+    init_db()
     await asyncio.gather(run_bot(), run_api())
 
 
