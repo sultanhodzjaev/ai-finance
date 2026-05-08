@@ -5,8 +5,11 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.27.0",
+    "fastapi>=0.136.1",
     "google-genai>=1.75.0",
     "google-generativeai>=0.8.6",
     "pillow>=12.2.0",
     "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.27",
+    "uvicorn>=0.46.0",
 ]

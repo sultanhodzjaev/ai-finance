@@ -30,3 +30,11 @@ NODE_ENV = "production"
 
 [services.production.health.startup]
 path = "/api/healthz"
+
+[[services]]
+localPort = 5000
+name = "Telegram Mini App"
+paths = ["/miniapp"]
+
+[services.development]
+run = "cd /home/runner/workspace/telegram-bot && PYTHONIOENCODING=utf-8 LANG=C.UTF-8 python main.py"

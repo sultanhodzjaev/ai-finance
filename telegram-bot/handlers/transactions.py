@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import datetime
 
 from aiogram import Router, F
@@ -20,7 +21,7 @@ router = Router()
 
 class TransactionStates(StatesGroup):
     """FSM-состояния для процесса записи транзакции."""
-    waiting_confirmation = State()    # Ожидаем подтверждения (✅/✏️/❌)
+    waiting_confirmation   = State()   # Ожидаем подтверждения (✅/✏️/❌)
     waiting_category_change = State()  # Ожидаем выбора новой категории
 
 
@@ -28,9 +29,9 @@ def get_confirmation_keyboard() -> InlineKeyboardMarkup:
     """Кнопки подтверждения транзакции."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Сохранить", callback_data="confirm_save"),
+            InlineKeyboardButton(text="✅ Сохранить",          callback_data="confirm_save"),
             InlineKeyboardButton(text="✏️ Изменить категорию", callback_data="confirm_change_cat"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="confirm_cancel"),
+            InlineKeyboardButton(text="❌ Отмена",             callback_data="confirm_cancel"),
         ]
     ])
 
@@ -61,7 +62,6 @@ def build_confirmation_text(data: dict) -> str:
         f"💵 Сумма: {amount_str}\n"
         f"📝 Описание: {data.get('description') or '—'}"
     )
-    # Для фото-чеков добавляем название магазина
     if data.get("merchant"):
         text += f"\n🏪 Магазин: {data['merchant']}"
     text += "\n\nСохранить?"
@@ -76,9 +76,8 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     """
     current_state = await state.get_state()
     if current_state is not None:
-        return  # Другой хэндлер обработает это сообщение
+        return
 
-    # Регистрируем пользователя если нужно
     user = message.from_user
     storage.get_or_create_user(
         telegram_id=user.id,
@@ -104,22 +103,20 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     if not result.get("success"):
         await message.answer(
             "Не понял, что ты хочешь записать. "
-            "Напиши, например: \"потратил 500 на обед\""
+            "Напиши, например: «потратил 500 на обед»"
         )
         return
 
-    # Получаем валюту пользователя
     db_user = storage.get_user(user.id)
     currency = db_user.get("currency", "KGS") if db_user else "KGS"
 
-    # Сохраняем данные во FSM-state до получения подтверждения
     transaction_data = {
-        "amount": result["amount"],
-        "category": result.get("category", "other"),
+        "amount":      result["amount"],
+        "category":    result.get("category", "other"),
         "description": result.get("description", ""),
-        "merchant": None,
-        "source": "text",
-        "currency": currency,
+        "merchant":    None,
+        "source":      "text",
+        "currency":    currency,
     }
     await state.set_state(TransactionStates.waiting_confirmation)
     await state.update_data(transaction=transaction_data)
@@ -147,7 +144,6 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
     processing_msg = await message.answer("📷 Распознаю чек...")
 
     try:
-        # Берём фото наилучшего качества (последнее в списке)
         photo = message.photo[-1]
         photo_file = await message.bot.get_file(photo.file_id)
         photo_bytes_io = await message.bot.download_file(photo_file.file_path)
@@ -180,12 +176,12 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
     currency = db_user.get("currency", "KGS") if db_user else "KGS"
 
     transaction_data = {
-        "amount": result["amount"],
-        "category": result.get("category", "other"),
+        "amount":      result["amount"],
+        "category":    result.get("category", "other"),
         "description": result.get("description", ""),
-        "merchant": result.get("merchant"),
-        "source": "photo",
-        "currency": currency,
+        "merchant":    result.get("merchant"),
+        "source":      "photo",
+        "currency":    currency,
     }
     await state.set_state(TransactionStates.waiting_confirmation)
     await state.update_data(transaction=transaction_data)
@@ -202,14 +198,15 @@ async def handle_save_transaction(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     transaction_data = data["transaction"]
 
-    # Финальная транзакция в формате хранилища
+    # Формируем финальную транзакцию с UUID — тот же формат, что и в Mini App
     transaction = {
-        "amount": transaction_data["amount"],
-        "category": transaction_data["category"],
+        "id":          str(uuid.uuid4()),
+        "amount":      transaction_data["amount"],
+        "category":    transaction_data["category"],
         "description": transaction_data["description"],
-        "merchant": transaction_data.get("merchant"),
-        "datetime": datetime.now().isoformat(),
-        "source": transaction_data.get("source", "text"),
+        "merchant":    transaction_data.get("merchant"),
+        "datetime":    datetime.now().isoformat(),
+        "source":      transaction_data.get("source", "text"),
     }
 
     storage.add_transaction(callback.from_user.id, transaction)

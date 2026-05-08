@@ -1,0 +1,583 @@
+# МАСТЕР-ПРОМПТ #2: ДОБАВЛЯЕМ TELEGRAM MINI APP
+## Дашборд и управление транзакциями
+
+---
+
+## КОНТЕКСТ
+
+В существующем проекте уже есть Telegram-бот на aiogram 3.x с интеграцией Gemini API для учёта личных трат. Бот хранит данные в Python-словаре в памяти (`services/storage.py`).
+
+**Твоя задача:** дополнить этот проект полноценным Telegram Mini App — веб-интерфейсом, который открывается прямо в Telegram и позволяет пользователю визуально управлять своими тратами.
+
+**ВАЖНО:** не создавай новый проект и не переписывай существующий код бота. Только дополняй — добавляй новые файлы и расширяй существующие там, где нужно.
+
+---
+
+## АРХИТЕКТУРА
+
+Mini App встроен в тот же Replit-проект, что и бот:
+
+- **Бэкенд:** FastAPI работает параллельно с aiogram-ботом в одном процессе. FastAPI отдаёт REST API для Mini App + раздаёт статические файлы фронтенда.
+- **Фронтенд:** одностраничный HTML+JS+Tailwind (без сборки, без npm). Лежит в папке `webapp/`.
+- **Данные:** общее хранилище с ботом — тот же `services/storage.py`. Бот пишет — Mini App читает, и наоборот.
+- **Аутентификация:** через Telegram WebApp `initData`. Каждый запрос к API проверяет подпись `initData` и извлекает `telegram_id`.
+
+---
+
+## ОБНОВЛЁННАЯ СТРУКТУРА ПРОЕКТА
+
+```
+project/
+├── main.py                    # обновить — запускаем bot + FastAPI параллельно
+├── handlers/                  # без изменений
+├── services/
+│   ├── gemini.py              # без изменений
+│   └── storage.py             # дополнить — функции update/delete транзакций
+├── api/                       # НОВОЕ
+│   ├── __init__.py
+│   ├── server.py              # FastAPI приложение
+│   ├── routes.py               # эндпоинты для Mini App
+│   └── auth.py                # валидация Telegram initData
+├── webapp/                    # НОВОЕ — фронтенд Mini App
+│   ├── index.html             # главная страница (SPA)
+│   ├── app.js                 # вся логика
+│   └── style.css              # дополнительные стили (опционально)
+├── utils/
+└── requirements.txt           # добавить fastapi, uvicorn
+```
+
+---
+
+## ОБНОВЛЕНИЕ `services/storage.py`
+
+Добавь в существующий модуль следующие функции:
+
+```python
+def get_transaction(telegram_id: int, transaction_id: str) -> dict | None:
+    """Получить одну транзакцию по ID"""
+    user = get_user(telegram_id)
+    if not user:
+        return None
+    for tx in user["transactions"]:
+        if tx["id"] == transaction_id:
+            return tx
+    return None
+
+def update_transaction(telegram_id: int, transaction_id: str, updates: dict) -> dict | None:
+    """Обновить транзакцию (сумма, категория, описание)"""
+    user = get_user(telegram_id)
+    if not user:
+        return None
+    for tx in user["transactions"]:
+        if tx["id"] == transaction_id:
+            tx.update(updates)
+            return tx
+    return None
+
+def delete_transaction(telegram_id: int, transaction_id: str) -> bool:
+    """Удалить транзакцию"""
+    user = get_user(telegram_id)
+    if not user:
+        return False
+    before = len(user["transactions"])
+    user["transactions"] = [tx for tx in user["transactions"] if tx["id"] != transaction_id]
+    return len(user["transactions"]) < before
+```
+
+**ВАЖНО:** в существующей функции `add_transaction` каждой транзакции должен присваиваться уникальный `id` (UUID). Если этого ещё нет — добавь.
+
+---
+
+## ВАЛИДАЦИЯ TELEGRAM INITDATA
+
+Файл `api/auth.py` — проверка подписи initData:
+
+```python
+import hashlib
+import hmac
+import json
+from urllib.parse import unquote, parse_qsl
+from os import environ
+
+BOT_TOKEN = environ.get("BOT_TOKEN")
+
+def validate_init_data(init_data: str) -> dict | None:
+    """
+    Валидирует initData от Telegram WebApp по HMAC-подписи.
+    Возвращает данные пользователя или None если подпись невалидна.
+
+    Документация: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    """
+    try:
+        parsed = dict(parse_qsl(init_data, strict_parsing=True))
+        received_hash = parsed.pop("hash", None)
+        if not received_hash:
+            return None
+
+        # Формируем data_check_string
+        data_check_string = "\n".join(
+            f"{key}={value}" for key, value in sorted(parsed.items())
+        )
+
+        # Считаем secret_key
+        secret_key = hmac.new(
+            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
+        ).digest()
+
+        # Считаем подпись
+        calculated_hash = hmac.new(
+            secret_key, data_check_string.encode(), hashlib.sha256
+        ).hexdigest()
+
+        if calculated_hash != received_hash:
+            return None
+
+        # Парсим user
+        user_str = parsed.get("user")
+        if user_str:
+            return json.loads(user_str)
+        return None
+    except Exception:
+        return None
+
+
+def get_telegram_id_from_request(init_data: str) -> int | None:
+    """Извлекает telegram_id из валидированного initData"""
+    user_data = validate_init_data(init_data)
+    if user_data:
+        return user_data.get("id")
+    return None
+```
+
+---
+
+## REST API ЭНДПОИНТЫ
+
+Файл `api/routes.py`:
+
+```python
+from fastapi import APIRouter, HTTPException, Header
+from datetime import datetime
+from services.storage import (
+    get_user, get_transactions, get_transaction,
+    update_transaction, delete_transaction, add_transaction
+)
+from api.auth import get_telegram_id_from_request
+from utils.categories import CATEGORIES
+import uuid
+
+router = APIRouter(prefix="/api")
+
+
+def require_auth(init_data: str) -> int:
+    """Хелпер — извлечь telegram_id или вернуть 401"""
+    telegram_id = get_telegram_id_from_request(init_data)
+    if not telegram_id:
+        raise HTTPException(status_code=401, detail="Invalid initData")
+    return telegram_id
+
+
+@router.get("/me")
+async def get_me(x_init_data: str = Header(...)):
+    """Получить данные текущего пользователя"""
+    telegram_id = require_auth(x_init_data)
+    user = get_user(telegram_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "telegram_id": user["telegram_id"],
+        "first_name": user["first_name"],
+        "currency": user["currency"]
+    }
+
+
+@router.get("/transactions")
+async def list_transactions(x_init_data: str = Header(...)):
+    """Получить все транзакции пользователя"""
+    telegram_id = require_auth(x_init_data)
+    txs = get_transactions(telegram_id)
+    # Сортируем от новых к старым
+    txs_sorted = sorted(txs, key=lambda x: x["datetime"], reverse=True)
+    return {"transactions": txs_sorted}
+
+
+@router.post("/transactions")
+async def create_transaction(payload: dict, x_init_data: str = Header(...)):
+    """Создать транзакцию из Mini App (без AI)"""
+    telegram_id = require_auth(x_init_data)
+    tx = {
+        "id": str(uuid.uuid4()),
+        "amount": float(payload["amount"]),
+        "category": payload["category"],
+        "description": payload.get("description", ""),
+        "merchant": None,
+        "datetime": datetime.now().isoformat(),
+        "source": "miniapp"
+    }
+    add_transaction(telegram_id, tx)
+    return tx
+
+
+@router.patch("/transactions/{tx_id}")
+async def edit_transaction(tx_id: str, payload: dict, x_init_data: str = Header(...)):
+    """Редактировать транзакцию"""
+    telegram_id = require_auth(x_init_data)
+    allowed_fields = ["amount", "category", "description"]
+    updates = {k: v for k, v in payload.items() if k in allowed_fields}
+    if "amount" in updates:
+        updates["amount"] = float(updates["amount"])
+    tx = update_transaction(telegram_id, tx_id, updates)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return tx
+
+
+@router.delete("/transactions/{tx_id}")
+async def remove_transaction(tx_id: str, x_init_data: str = Header(...)):
+    """Удалить транзакцию"""
+    telegram_id = require_auth(x_init_data)
+    success = delete_transaction(telegram_id, tx_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return {"success": True}
+
+
+@router.get("/stats")
+async def get_stats(x_init_data: str = Header(...)):
+    """Статистика по категориям за текущий месяц"""
+    telegram_id = require_auth(x_init_data)
+    txs = get_transactions(telegram_id)
+    now = datetime.now()
+    month_txs = [
+        tx for tx in txs
+        if datetime.fromisoformat(tx["datetime"]).year == now.year
+        and datetime.fromisoformat(tx["datetime"]).month == now.month
+    ]
+
+    # Группируем по категориям
+    by_category = {}
+    for tx in month_txs:
+        cat = tx["category"]
+        by_category[cat] = by_category.get(cat, 0) + tx["amount"]
+
+    total = sum(by_category.values())
+
+    # Группируем по дням (для line chart)
+    by_day = {}
+    for tx in month_txs:
+        day = datetime.fromisoformat(tx["datetime"]).strftime("%Y-%m-%d")
+        by_day[day] = by_day.get(day, 0) + tx["amount"]
+
+    return {
+        "total": total,
+        "transaction_count": len(month_txs),
+        "by_category": by_category,
+        "by_day": by_day
+    }
+
+
+@router.get("/categories")
+async def list_categories(x_init_data: str = Header(...)):
+    """Список доступных категорий"""
+    require_auth(x_init_data)
+    return {"categories": CATEGORIES}
+```
+
+---
+
+## FASTAPI СЕРВЕР
+
+Файл `api/server.py`:
+
+```python
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from api.routes import router
+
+app = FastAPI(title="AI-финансист API")
+
+# CORS — разрешаем запросы от Telegram WebApp
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # в проде ограничить доменом
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router)
+
+# Раздаём фронтенд Mini App из папки webapp/
+app.mount("/", StaticFiles(directory="webapp", html=True), name="webapp")
+```
+
+---
+
+## ЗАПУСК БОТА И FASTAPI ПАРАЛЛЕЛЬНО
+
+Обнови `main.py` — теперь нужно запускать aiogram-бот и uvicorn-сервер одновременно через `asyncio.gather`:
+
+```python
+import asyncio
+import logging
+import uvicorn
+from aiogram import Bot, Dispatcher
+from os import environ
+
+from handlers.start import router as start_router
+from handlers.transactions import router as transactions_router
+from handlers.stats import router as stats_router
+from handlers.ai_advisor import router as advisor_router
+from api.server import app as fastapi_app
+
+logging.basicConfig(level=logging.INFO)
+
+async def run_bot():
+    bot = Bot(token=environ["BOT_TOKEN"])
+    dp = Dispatcher()
+    dp.include_router(start_router)
+    dp.include_router(transactions_router)
+    dp.include_router(stats_router)
+    dp.include_router(advisor_router)
+    await dp.start_polling(bot)
+
+async def run_api():
+    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8080, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+async def main():
+    await asyncio.gather(run_bot(), run_api())
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## ОБНОВЛЕНИЕ БОТА — КНОПКА ОТКРЫТИЯ MINI APP
+
+В `handlers/start.py` в главное меню добавь кнопку открытия Mini App:
+
+```python
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from os import environ
+
+WEBAPP_URL = environ.get("WEBAPP_URL", "https://your-replit-project.replit.dev")
+
+def main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📲 Открыть приложение",
+            web_app=WebAppInfo(url=WEBAPP_URL)
+        )],
+        [InlineKeyboardButton(text="💬 Спросить финансиста", callback_data="ask")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
+    ])
+```
+
+**Важно:** добавь в Replit Secrets переменную `WEBAPP_URL` со значением публичного URL твоего Replit-проекта (вида `https://project-name.username.replit.dev`).
+
+---
+
+## ФРОНТЕНД MINI APP
+
+Файл `webapp/index.html` — одностраничное приложение со всеми экранами через JS-роутинг (без библиотек, чистый JS).
+
+### Технологии
+
+- HTML5 + Tailwind CSS (через CDN)
+- Чистый JavaScript (без React, без сборки)
+- Chart.js через CDN — для графиков
+- Telegram WebApp SDK через CDN: `https://telegram.org/js/telegram-web-app.js`
+
+### Что должно быть в HTML
+
+```html
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Финансист</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-50">
+    <div id="app"></div>
+    <script src="app.js"></script>
+</body>
+</html>
+```
+
+### Экраны и логика (`webapp/app.js`)
+
+Реализуй SPA с тремя основными экранами и нижней навигацией:
+
+#### Экран 1: Дашборд (главный)
+
+- Шапка с приветствием: «Привет, {first_name}!» и текущей валютой
+- Большая карточка «Потрачено в этом месяце»: сумма + количество транзакций
+- Pie chart по категориям (Chart.js, тип `doughnut`)
+- Топ-3 категории списком с эмодзи и суммой
+- Кнопка-FAB справа внизу: «+ Добавить трату»
+- Под графиком: line chart по дням месяца (тип `line`)
+
+#### Экран 2: История
+
+- Список всех транзакций, отсортированный по дате (новые сверху)
+- Каждая запись:
+  - Эмодзи категории (большой)
+  - Название категории + описание (мелкий шрифт)
+  - Сумма справа (жирно)
+  - Дата под суммой (мелкий шрифт)
+- Тап на запись → открывается Bottom Sheet с деталями и кнопками
+- Фильтр сверху: «День / Неделя / Месяц / Всё»
+
+#### Экран 3: Добавить трату
+
+- Большое поле «Сумма» (numeric input)
+- Выбор категории — горизонтальный grid из 10 кнопок с эмодзи (выделяется выбранная)
+- Поле «Описание» (опциональное)
+- Кнопка «Сохранить» (primary, на всю ширину)
+
+#### Bottom Sheet — детали транзакции
+
+При тапе на транзакцию из истории — снизу выезжает панель:
+- Сумма (большая)
+- Категория с эмодзи
+- Описание
+- Дата и время
+- Источник записи (текст / фото / Mini App)
+- Кнопка ✏️ «Редактировать»
+- Кнопка 🗑 «Удалить» (красная, с подтверждением через `tg.showConfirm()`)
+
+### Нижняя навигация
+
+Зафиксированная внизу полоса с 3 иконками:
+- 📊 Дашборд
+- 📜 История
+- ➕ Добавить (выделенная кнопка по центру)
+
+### Telegram WebApp интеграция
+
+В начале `app.js`:
+
+```javascript
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+// Используем тему Telegram
+document.documentElement.style.setProperty('--bg-color', tg.themeParams.bg_color || '#f9fafb');
+document.documentElement.style.setProperty('--text-color', tg.themeParams.text_color || '#1f2937');
+
+// Все запросы к API передают initData в заголовке
+async function apiRequest(method, path, body = null) {
+    const options = {
+        method,
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Init-Data': tg.initData
+        }
+    };
+    if (body) options.body = JSON.stringify(body);
+
+    const response = await fetch(`/api${path}`, options);
+    if (!response.ok) {
+        tg.showAlert(`Ошибка: ${response.status}`);
+        throw new Error(`API error: ${response.status}`);
+    }
+    return response.json();
+}
+
+// При загрузке — получаем данные пользователя и грузим дашборд
+async function init() {
+    try {
+        const me = await apiRequest('GET', '/me');
+        renderDashboard(me);
+    } catch (e) {
+        document.getElementById('app').innerHTML = `
+            <div class="p-8 text-center">
+                <p class="text-red-600">Не удалось загрузить данные</p>
+                <p class="text-sm text-gray-500 mt-2">Открой приложение через бота в Telegram</p>
+            </div>
+        `;
+    }
+}
+
+init();
+```
+
+### UI требования
+
+- Дизайн в стиле iOS/Material — мягкие тени, скруглённые углы
+- Цветовая палитра — нейтральная, опирается на тему Telegram (`tg.themeParams`)
+- Эмодзи категорий — крупно, как часть UX
+- Анимации Tailwind — плавные переходы между экранами (`transition-all duration-200`)
+- Mobile-first — макет рассчитан на узкий экран телефона
+- Все суммы выводятся в формате с разделителями: `12 500 сом`
+
+---
+
+## REQUIREMENTS.TXT (обновлённый)
+
+```
+aiogram>=3.4.0
+google-generativeai>=0.8.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+```
+
+---
+
+## REPLIT SECRETS (что должно быть)
+
+- `BOT_TOKEN` — токен бота (уже есть)
+- `GEMINI_API_KEY` — ключ Gemini (уже есть)
+- `WEBAPP_URL` — публичный URL Replit-проекта (новое; формат `https://project-name.username.replit.dev`)
+
+---
+
+## ВАЖНЫЕ ТРЕБОВАНИЯ
+
+1. **НЕ ломать существующую логику бота** — все хендлеры aiogram продолжают работать как были.
+2. **Общее хранилище** — бот и Mini App работают с одним и тем же `_storage` в `services/storage.py`. Транзакции, добавленные через бот, видны в Mini App, и наоборот.
+3. **Валидация initData обязательна** на каждом эндпоинте — без неё любой может вытащить чужие данные.
+4. **Никакой записи на диск** — данные по-прежнему только в памяти, как было в первом промпте.
+5. **Один процесс** — бот и FastAPI запускаются вместе через `asyncio.gather`. Не два отдельных скрипта.
+6. **Replit раздаёт HTTPS автоматически** — Telegram Mini App требует HTTPS, у Replit-проектов он уже есть из коробки на `*.replit.dev` доменах.
+
+---
+
+## ФИНАЛЬНАЯ ПРОВЕРКА
+
+После запуска `main.py`:
+
+✅ Бот по-прежнему отвечает на `/start`, `/today`, `/stats`, `/help` и т.д.
+✅ В главном меню бота есть кнопка «📲 Открыть приложение»
+✅ При нажатии на кнопку открывается Mini App внутри Telegram
+✅ В Mini App видно приветствие с именем пользователя
+✅ Дашборд показывает баланс, pie chart по категориям, line chart по дням
+✅ Раздел «История» показывает список всех транзакций
+✅ Тап по транзакции открывает Bottom Sheet с деталями
+✅ Можно отредактировать транзакцию (сумма, категория, описание)
+✅ Можно удалить транзакцию (с подтверждением)
+✅ Можно добавить новую трату через форму в Mini App
+✅ Транзакции, записанные через бота, видны в Mini App, и наоборот
+✅ Без валидного initData API возвращает 401
+
+---
+
+## ДОПОЛНИТЕЛЬНО
+
+- Код пиши с подробными комментариями на русском
+- В `app.js` разделяй логику по функциям: `renderDashboard()`, `renderHistory()`, `renderAddForm()`, `renderTransactionDetails()`
+- Используй native browser API — не подключай jQuery или другие тяжёлые либы
+- Все размеры — в Tailwind-классах, без инлайн-стилей
