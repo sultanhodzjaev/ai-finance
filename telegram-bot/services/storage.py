@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def _client() -> Client:
     url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
+    # service_role ключ обходит RLS — используем для серверного приложения
+    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ["SUPABASE_KEY"]
     return create_client(url, key)
 
 
