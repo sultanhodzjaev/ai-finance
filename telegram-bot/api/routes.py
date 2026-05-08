@@ -4,9 +4,9 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Query
 
-from api.auth import get_telegram_id
+from api.auth import get_telegram_id, validate_init_data, parse_init_data_user
 from services.storage import (
-    get_user, get_transactions, get_transaction,
+    get_user, get_or_create_user, get_transactions, get_transaction,
     update_transaction, delete_transaction, add_transaction,
 )
 from utils.categories import CATEGORIES, INCOME_CATEGORIES
@@ -21,13 +21,28 @@ def require_auth(init_data: str) -> int:
     return telegram_id
 
 
-@router.get("/me")
-async def get_me(x_init_data: str = Header(...)):
-    """Данные текущего пользователя."""
-    telegram_id = require_auth(x_init_data)
+def ensure_user(init_data: str, telegram_id: int) -> dict:
+    """
+    Возвращает пользователя, авто-создавая его если он открыл Mini App
+    до команды /start в боте.
+    """
     user = get_user(telegram_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        # Берём имя из initData без проверки хэша (только для регистрации)
+        tg_user = parse_init_data_user(init_data) or {}
+        user = get_or_create_user(
+            telegram_id=telegram_id,
+            username=tg_user.get("username", ""),
+            first_name=tg_user.get("first_name", "Друг"),
+        )
+    return user
+
+
+@router.get("/me")
+async def get_me(x_init_data: str = Header(...)):
+    """Данные текущего пользователя. Авто-создаёт пользователя если нужно."""
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
     return {
         "telegram_id": user["telegram_id"],
         "first_name":  user["first_name"],
@@ -42,9 +57,9 @@ async def list_transactions(
 ):
     """Все транзакции пользователя с опциональным фильтром по типу."""
     telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
     txs = get_transactions(telegram_id)
 
-    # Обратная совместимость: транзакции без type считаются expense
     if type in ("income", "expense"):
         txs = [tx for tx in txs if tx.get("type", "expense") == type]
 
@@ -55,6 +70,7 @@ async def list_transactions(
 async def create_transaction(payload: dict, x_init_data: str = Header(...)):
     """Создать транзакцию из Mini App (без AI)."""
     telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
     tx = {
         "id":          str(uuid.uuid4()),
         "type":        payload.get("type", "expense"),
@@ -128,14 +144,14 @@ async def get_stats(x_init_data: str = Header(...)):
     total_income  = sum(income_by_category.values())
 
     return {
-        "total_income":          total_income,
-        "total_expense":         total_expense,
-        "balance":               total_income - total_expense,
-        "transaction_count":     len(month_txs),
-        "expense_by_category":   expense_by_category,
-        "income_by_category":    income_by_category,
-        "expense_by_day":        expense_by_day,
-        "income_by_day":         income_by_day,
+        "total_income":        total_income,
+        "total_expense":       total_expense,
+        "balance":             total_income - total_expense,
+        "transaction_count":   len(month_txs),
+        "expense_by_category": expense_by_category,
+        "income_by_category":  income_by_category,
+        "expense_by_day":      expense_by_day,
+        "income_by_day":       income_by_day,
     }
 
 
