@@ -6,27 +6,26 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
 from services import storage
-from utils.categories import get_category
+from utils.categories import get_category, get_category_by_id
 from utils.formatters import format_amount, format_date
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Названия месяцев для заголовков на русском
 MONTH_NAMES_GEN = [
     "январе", "феврале", "марте", "апреле", "мае", "июне",
-    "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"
+    "июле", "августе", "сентябре", "октябре", "ноябре", "декабре",
 ]
 MONTH_NAMES_NOM = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 ]
 
 
 @router.message(Command("today"))
 @router.callback_query(F.data == "show_today")
 async def cmd_today(event: Message | CallbackQuery):
-    """Показывает все траты пользователя за сегодня."""
+    """Показывает доходы и расходы за сегодня с остатком."""
     if isinstance(event, CallbackQuery):
         user_id = event.from_user.id
         send = event.message.answer
@@ -39,43 +38,56 @@ async def cmd_today(event: Message | CallbackQuery):
     transactions = storage.get_transactions(user_id)
     currency = user.get("currency", "KGS")
 
-    # Фильтруем транзакции за сегодня
     today = date.today()
-    today_transactions = []
-    for t in transactions:
-        try:
-            t_date = datetime.fromisoformat(t["datetime"]).date()
-            if t_date == today:
-                today_transactions.append(t)
-        except Exception:
-            pass
+    today_txs = [
+        t for t in transactions
+        if _safe_date(t) == today
+    ]
 
-    if not today_transactions:
-        await send(
-            "Сегодня ты ещё ничего не записал. "
-            "Так держать или забыл записать? 😄"
-        )
+    if not today_txs:
+        await send("Сегодня ты ещё ничего не записал. Так держать или забыл записать? 😄")
         return
 
     today_dt = datetime.today()
+    incomes  = [t for t in today_txs if t.get("type") == "income"]
+    expenses = [t for t in today_txs if t.get("type", "expense") == "expense"]
+
+    total_income  = sum(t["amount"] for t in incomes)
+    total_expense = sum(t["amount"] for t in expenses)
+    balance       = total_income - total_expense
+
     lines = [f"📅 Сегодня, {format_date(today_dt)}\n"]
-    total = 0.0
 
-    for t in today_transactions:
-        cat = get_category(t.get("category", "other"))
-        amount = t.get("amount", 0)
-        total += amount
-        desc = f" ({t['description']})" if t.get("description") else ""
-        lines.append(f"{cat['emoji']} {cat['name']} — {format_amount(amount, currency)}{desc}")
+    # --- Секция доходов ---
+    if incomes:
+        lines.append("💰 ДОХОДЫ")
+        for t in incomes:
+            cat  = get_category_by_id(t.get("category", "other")) or {"emoji": "💰", "name": "Доход"}
+            desc = f" ({t['description']})" if t.get("description") else ""
+            lines.append(f"{cat['emoji']} {cat['name']} — +{format_amount(t['amount'], currency)}{desc}")
+        lines.append(f"📊 Итого доходов: {format_amount(total_income, currency)}\n")
 
-    lines.append(f"\n💰 Всего потрачено: {format_amount(total, currency)}")
+    # --- Секция расходов ---
+    if expenses:
+        lines.append("💸 РАСХОДЫ")
+        for t in expenses:
+            cat  = get_category_by_id(t.get("category", "other")) or {"emoji": "📦", "name": "Другое"}
+            desc = f" ({t['description']})" if t.get("description") else ""
+            lines.append(f"{cat['emoji']} {cat['name']} — {format_amount(t['amount'], currency)}{desc}")
+        lines.append(f"📊 Итого расходов: {format_amount(total_expense, currency)}\n")
+
+    # --- Итоговый остаток ---
+    sign = "+" if balance >= 0 else ""
+    emoji = "✅" if balance >= 0 else "⚠️"
+    lines.append(f"{emoji} Остаток за день: {sign}{format_amount(balance, currency)}")
+
     await send("\n".join(lines))
 
 
 @router.message(Command("stats"))
 @router.callback_query(F.data == "show_stats")
 async def cmd_stats(event: Message | CallbackQuery):
-    """Показывает статистику трат за текущий месяц."""
+    """Показывает статистику доходов и расходов за текущий месяц."""
     if isinstance(event, CallbackQuery):
         user_id = event.from_user.id
         send = event.message.answer
@@ -89,51 +101,78 @@ async def cmd_stats(event: Message | CallbackQuery):
     currency = user.get("currency", "KGS")
 
     now = datetime.now()
-    current_month = now.month
-    current_year = now.year
+    month_txs = [
+        t for t in transactions
+        if _safe_dt(t).month == now.month and _safe_dt(t).year == now.year
+    ]
 
-    # Фильтруем транзакции за текущий месяц
-    month_transactions = []
-    for t in transactions:
-        try:
-            dt = datetime.fromisoformat(t["datetime"])
-            if dt.month == current_month and dt.year == current_year:
-                month_transactions.append(t)
-        except Exception:
-            pass
-
-    if not month_transactions:
-        await send(
-            f"В {MONTH_NAMES_GEN[current_month - 1]} ты ещё ничего не записал."
-        )
+    if not month_txs:
+        await send(f"В {MONTH_NAMES_GEN[now.month - 1]} ты ещё ничего не записал.")
         return
 
+    incomes  = [t for t in month_txs if t.get("type") == "income"]
+    expenses = [t for t in month_txs if t.get("type", "expense") == "expense"]
+
     # Считаем итоги по категориям
-    categories_totals: dict[str, float] = {}
-    total = 0.0
-    for t in month_transactions:
-        cat_id = t.get("category", "other")
-        amount = t.get("amount", 0)
-        categories_totals[cat_id] = categories_totals.get(cat_id, 0) + amount
-        total += amount
+    income_by_cat: dict[str, float]  = {}
+    expense_by_cat: dict[str, float] = {}
+    for t in incomes:
+        cat = t.get("category", "other_income")
+        income_by_cat[cat] = income_by_cat.get(cat, 0) + t["amount"]
+    for t in expenses:
+        cat = t.get("category", "other")
+        expense_by_cat[cat] = expense_by_cat.get(cat, 0) + t["amount"]
 
-    # Среднее в день (от начала месяца до сегодня)
+    total_income  = sum(income_by_cat.values())
+    total_expense = sum(expense_by_cat.values())
+    balance       = total_income - total_expense
+
     days_elapsed = now.day
-    avg_per_day = total / days_elapsed if days_elapsed > 0 else 0
+    avg_per_day  = total_expense / days_elapsed if days_elapsed > 0 else 0
 
-    month_name = MONTH_NAMES_NOM[current_month - 1]
+    month_name = MONTH_NAMES_NOM[now.month - 1]
     lines = [f"📊 Статистика за {month_name}\n"]
 
-    # Сортируем категории по убыванию суммы
-    for cat_id, amount in sorted(categories_totals.items(), key=lambda x: -x[1]):
-        cat = get_category(cat_id)
-        percent = (amount / total * 100) if total > 0 else 0
-        lines.append(
-            f"{cat['emoji']} {cat['name']} — {format_amount(amount, currency)} ({percent:.0f}%)"
-        )
+    # --- Секция доходов ---
+    if incomes:
+        lines.append("💰 ДОХОДЫ")
+        for cat_id, amount in sorted(income_by_cat.items(), key=lambda x: -x[1]):
+            cat     = get_category_by_id(cat_id) or {"emoji": "💰", "name": cat_id}
+            percent = (amount / total_income * 100) if total_income > 0 else 0
+            lines.append(f"{cat['emoji']} {cat['name']} — {format_amount(amount, currency)} ({percent:.0f}%)")
+        lines.append(f"📊 Итого: {format_amount(total_income, currency)}\n")
 
-    lines.append(f"\n💰 Всего: {format_amount(total, currency)}")
-    lines.append(f"📈 Среднее в день: {format_amount(avg_per_day, currency)}")
-    lines.append(f"🔢 Транзакций: {len(month_transactions)}")
+    # --- Секция расходов ---
+    if expenses:
+        lines.append("💸 РАСХОДЫ")
+        for cat_id, amount in sorted(expense_by_cat.items(), key=lambda x: -x[1]):
+            cat     = get_category_by_id(cat_id) or {"emoji": "📦", "name": cat_id}
+            percent = (amount / total_expense * 100) if total_expense > 0 else 0
+            lines.append(f"{cat['emoji']} {cat['name']} — {format_amount(amount, currency)} ({percent:.0f}%)")
+        lines.append(f"📊 Итого: {format_amount(total_expense, currency)}\n")
+
+    # --- Итоговые строки ---
+    sign  = "+" if balance >= 0 else ""
+    emoji = "✅" if balance >= 0 else "⚠️"
+    lines.append(f"{emoji} Остаток за месяц: {sign}{format_amount(balance, currency)}")
+    if expenses:
+        lines.append(f"📈 Среднее в день (расходы): {format_amount(avg_per_day, currency)}")
+    lines.append(f"🔢 Транзакций: {len(month_txs)}")
 
     await send("\n".join(lines))
+
+
+# ---- helpers ----
+
+def _safe_date(t: dict) -> date:
+    try:
+        return datetime.fromisoformat(t["datetime"]).date()
+    except Exception:
+        return date.min
+
+
+def _safe_dt(t: dict) -> datetime:
+    try:
+        return datetime.fromisoformat(t["datetime"])
+    except Exception:
+        return datetime.min

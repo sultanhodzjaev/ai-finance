@@ -12,7 +12,10 @@ from aiogram.types import (
 
 from services import gemini, storage
 from services.gemini import RateLimitError
-from utils.categories import CATEGORIES, get_category, get_category_display
+from utils.categories import (
+    CATEGORIES, INCOME_CATEGORIES,
+    get_category, get_category_by_id, get_category_display,
+)
 from utils.formatters import format_amount
 
 logger = logging.getLogger(__name__)
@@ -20,28 +23,25 @@ router = Router()
 
 
 class TransactionStates(StatesGroup):
-    """FSM-состояния для процесса записи транзакции."""
-    waiting_confirmation   = State()   # Ожидаем подтверждения (✅/✏️/❌)
-    waiting_category_change = State()  # Ожидаем выбора новой категории
+    waiting_confirmation    = State()
+    waiting_category_change = State()
 
 
 def get_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Кнопки подтверждения транзакции."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Сохранить",          callback_data="confirm_save"),
-            InlineKeyboardButton(text="✏️ Изменить категорию", callback_data="confirm_change_cat"),
-            InlineKeyboardButton(text="❌ Отмена",             callback_data="confirm_cancel"),
-        ]
-    ])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Сохранить",          callback_data="confirm_save"),
+        InlineKeyboardButton(text="✏️ Изменить категорию", callback_data="confirm_change_cat"),
+        InlineKeyboardButton(text="❌ Отмена",             callback_data="confirm_cancel"),
+    ]])
 
 
-def get_categories_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для выбора категории — 2 кнопки в ряд."""
+def get_categories_keyboard(tx_type: str = "expense") -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру категорий — расходных или доходных."""
+    source = CATEGORIES if tx_type == "expense" else INCOME_CATEGORIES
     buttons = []
-    for i in range(0, len(CATEGORIES), 2):
+    for i in range(0, len(source), 2):
         row = []
-        for cat in CATEGORIES[i:i + 2]:
+        for cat in source[i:i + 2]:
             row.append(InlineKeyboardButton(
                 text=f"{cat['emoji']} {cat['name']}",
                 callback_data=f"cat_{cat['id']}",
@@ -51,16 +51,25 @@ def get_categories_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_confirmation_text(data: dict) -> str:
-    """Формирует текст карточки подтверждения транзакции."""
+    """Формирует карточку подтверждения — разная для расхода и дохода."""
     currency = data.get("currency", "KGS")
-    cat = get_category(data["category"])
-    amount_str = format_amount(data["amount"], currency)
+    tx_type  = data.get("type", "expense")
+    cat      = get_category_by_id(data["category"]) or {"emoji": "📦", "name": data["category"]}
+    amount   = data["amount"]
+    desc     = data.get("description") or "—"
+
+    if tx_type == "income":
+        header = "✅ Записать доход?"
+        amount_str = f"+{format_amount(amount, currency)}"
+    else:
+        header = "💰 Записать трату?"
+        amount_str = format_amount(amount, currency)
 
     text = (
-        "💰 Записать трату?\n\n"
+        f"{header}\n\n"
         f"{cat['emoji']} Категория: {cat['name']}\n"
         f"💵 Сумма: {amount_str}\n"
-        f"📝 Описание: {data.get('description') or '—'}"
+        f"📝 Описание: {desc}"
     )
     if data.get("merchant"):
         text += f"\n🏪 Магазин: {data['merchant']}"
@@ -70,10 +79,7 @@ def build_confirmation_text(data: dict) -> str:
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text_transaction(message: Message, state: FSMContext):
-    """
-    Обрабатывает любое текстовое сообщение (не команду) как потенциальную трату.
-    Если пользователь уже в другом FSM-состоянии — пропускает.
-    """
+    """Обрабатывает текстовое сообщение как трату или доход."""
     current_state = await state.get_state()
     if current_state is not None:
         return
@@ -103,14 +109,15 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     if not result.get("success"):
         await message.answer(
             "Не понял, что ты хочешь записать. "
-            "Напиши, например: «потратил 500 на обед»"
+            "Напиши, например: «потратил 500 на обед» или «получил зарплату 50000»"
         )
         return
 
-    db_user = storage.get_user(user.id)
+    db_user  = storage.get_user(user.id)
     currency = db_user.get("currency", "KGS") if db_user else "KGS"
 
     transaction_data = {
+        "type":        result.get("type", "expense"),
         "amount":      result["amount"],
         "category":    result.get("category", "other"),
         "description": result.get("description", ""),
@@ -129,7 +136,7 @@ async def handle_text_transaction(message: Message, state: FSMContext):
 
 @router.message(F.photo)
 async def handle_photo_transaction(message: Message, state: FSMContext):
-    """Обрабатывает фото как потенциальный чек."""
+    """Обрабатывает фото как потенциальный чек (всегда расход)."""
     current_state = await state.get_state()
     if current_state is not None:
         return
@@ -148,7 +155,6 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
         photo_file = await message.bot.get_file(photo.file_id)
         photo_bytes_io = await message.bot.download_file(photo_file.file_path)
         photo_bytes = photo_bytes_io.read()
-
         result = await gemini.recognize_receipt_photo(photo_bytes)
     except RateLimitError:
         await processing_msg.delete()
@@ -157,25 +163,22 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка при обработке фото: {e}")
         await processing_msg.delete()
-        await message.answer(
-            "Не получилось обработать фото. "
-            "Попробуй другое или введи трату текстом"
-        )
+        await message.answer("Не получилось обработать фото. Попробуй другое или введи трату текстом")
         return
 
     await processing_msg.delete()
 
     if not result.get("success"):
         await message.answer(
-            "Не получилось распознать чек. "
-            "Попробуй сфотографировать ещё раз или введи трату текстом"
+            "Не получилось распознать чек. Попробуй сфотографировать ещё раз или введи трату текстом"
         )
         return
 
-    db_user = storage.get_user(user.id)
+    db_user  = storage.get_user(user.id)
     currency = db_user.get("currency", "KGS") if db_user else "KGS"
 
     transaction_data = {
+        "type":        "expense",   # чеки — всегда расходы
         "amount":      result["amount"],
         "category":    result.get("category", "other"),
         "description": result.get("description", ""),
@@ -194,44 +197,50 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
 
 @router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_save")
 async def handle_save_transaction(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет транзакцию в память после подтверждения пользователем."""
+    """Сохраняет транзакцию после подтверждения."""
     data = await state.get_data()
-    transaction_data = data["transaction"]
+    td   = data["transaction"]
+    tx_type = td.get("type", "expense")
 
-    # Формируем финальную транзакцию с UUID — тот же формат, что и в Mini App
     transaction = {
         "id":          str(uuid.uuid4()),
-        "amount":      transaction_data["amount"],
-        "category":    transaction_data["category"],
-        "description": transaction_data["description"],
-        "merchant":    transaction_data.get("merchant"),
+        "type":        tx_type,
+        "amount":      td["amount"],
+        "category":    td["category"],
+        "description": td["description"],
+        "merchant":    td.get("merchant"),
         "datetime":    datetime.now().isoformat(),
-        "source":      transaction_data.get("source", "text"),
+        "source":      td.get("source", "text"),
     }
 
     storage.add_transaction(callback.from_user.id, transaction)
     await state.clear()
-
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("✅ Записал! Так держать.")
+
+    if tx_type == "income":
+        await callback.message.answer("💰 Записал доход! Поздравляю!")
+    else:
+        await callback.message.answer("✅ Записал трату! Так держать.")
     await callback.answer()
 
 
 @router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_change_cat")
 async def handle_change_category(callback: CallbackQuery, state: FSMContext):
-    """Переводит в состояние выбора новой категории."""
+    """Переводит в состояние выбора категории (показывает нужный список)."""
+    data    = await state.get_data()
+    tx_type = data["transaction"].get("type", "expense")
+
     await state.set_state(TransactionStates.waiting_category_change)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         "Выбери категорию:",
-        reply_markup=get_categories_keyboard(),
+        reply_markup=get_categories_keyboard(tx_type),
     )
     await callback.answer()
 
 
 @router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_cancel")
 async def handle_cancel_transaction(callback: CallbackQuery, state: FSMContext):
-    """Отменяет запись транзакции."""
     await state.clear()
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("Окей, отменил.")
@@ -241,17 +250,16 @@ async def handle_cancel_transaction(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(TransactionStates.waiting_category_change, F.data.startswith("cat_"))
 async def handle_category_selected(callback: CallbackQuery, state: FSMContext):
     """Обновляет категорию и возвращает к карточке подтверждения."""
-    new_category_id = callback.data.replace("cat_", "")
-
+    new_cat_id = callback.data.replace("cat_", "")
     data = await state.get_data()
-    transaction_data = data["transaction"]
-    transaction_data["category"] = new_category_id
-    await state.update_data(transaction=transaction_data)
-    await state.set_state(TransactionStates.waiting_confirmation)
+    td   = data["transaction"]
+    td["category"] = new_cat_id
 
+    await state.update_data(transaction=td)
+    await state.set_state(TransactionStates.waiting_confirmation)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        build_confirmation_text(transaction_data),
+        build_confirmation_text(td),
         reply_markup=get_confirmation_keyboard(),
     )
     await callback.answer()
