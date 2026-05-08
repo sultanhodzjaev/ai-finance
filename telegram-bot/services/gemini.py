@@ -11,7 +11,12 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+# Список моделей в порядке приоритета — пробуем по очереди если предыдущая недоступна
+GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+]
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 VALID_CATEGORIES = [
     "food", "groceries", "transport", "entertainment",
@@ -33,34 +38,48 @@ def _api_key() -> str:
 async def _generate(contents: list, retries: int = 3) -> str:
     """
     Отправляет запрос к Gemini REST API и возвращает текст ответа.
-    При ошибке 429 (rate limit) делает до 3 повторных попыток с нарастающей задержкой.
+    Перебирает модели по списку (gemini-2.0-flash → gemini-1.5-flash).
+    При ошибке 429 делает до 3 попыток с нарастающей задержкой.
     """
     payload = {"contents": contents}
-    url = f"{GEMINI_API_URL}?key={_api_key()}"
+    key = _api_key()
 
-    for attempt in range(retries):
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
+    last_error: Exception = RuntimeError("Нет доступных моделей")
 
-        if response.status_code == 429:
-            # Превышен лимит запросов — ждём и повторяем
-            wait = 5 * (attempt + 1)  # 5с, 10с, 15с
-            logger.warning(f"Rate limit 429, попытка {attempt + 1}/{retries}, жду {wait}с...")
-            if attempt < retries - 1:
-                await asyncio.sleep(wait)
-                continue
-            else:
-                raise RateLimitError("Превышен лимит запросов к Gemini API")
+    for model in GEMINI_MODELS:
+        url = f"{GEMINI_API_BASE}/{model}:generateContent?key={key}"
 
-        response.raise_for_status()
-        data = response.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        for attempt in range(retries):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
 
-    raise RateLimitError("Превышен лимит запросов к Gemini API")
+            if response.status_code == 404:
+                # Модель недоступна для этого ключа — пробуем следующую
+                logger.warning(f"Модель {model} недоступна (404), пробую следующую...")
+                last_error = httpx.HTTPStatusError(
+                    f"404 для {model}", request=response.request, response=response
+                )
+                break  # выходим из retry-цикла, переходим к след. модели
+
+            if response.status_code == 429:
+                wait = 5 * (attempt + 1)  # 5с, 10с, 15с
+                logger.warning(f"Rate limit 429 для {model}, попытка {attempt + 1}/{retries}, жду {wait}с...")
+                if attempt < retries - 1:
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    raise RateLimitError("Превышен лимит запросов к Gemini API")
+
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Используется модель: {model}")
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    raise last_error
 
 
 def _extract_json(text: str) -> dict:
