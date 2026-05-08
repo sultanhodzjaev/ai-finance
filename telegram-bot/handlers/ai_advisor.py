@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
 from services import gemini, storage
+from services.gemini import RateLimitError
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -55,6 +56,11 @@ async def handle_advisor_question(message: Message, state: FSMContext):
             currency=currency,
             transactions=transactions,
         )
+    except RateLimitError:
+        await thinking_msg.delete()
+        await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
+        await state.clear()
+        return
     except Exception:
         await thinking_msg.delete()
         await message.answer("Что-то пошло не так с AI. Попробуй ещё раз через минуту")

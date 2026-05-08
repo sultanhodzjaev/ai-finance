@@ -10,6 +10,7 @@ from aiogram.types import (
 )
 
 from services import gemini, storage
+from services.gemini import RateLimitError
 from utils.categories import CATEGORIES, get_category, get_category_display
 from utils.formatters import format_amount
 
@@ -89,6 +90,10 @@ async def handle_text_transaction(message: Message, state: FSMContext):
 
     try:
         result = await gemini.categorize_text_transaction(message.text)
+    except RateLimitError:
+        await processing_msg.delete()
+        await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
+        return
     except Exception:
         await processing_msg.delete()
         await message.answer("Что-то пошло не так с AI. Попробуй ещё раз через минуту")
@@ -149,6 +154,10 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
         photo_bytes = photo_bytes_io.read()
 
         result = await gemini.recognize_receipt_photo(photo_bytes)
+    except RateLimitError:
+        await processing_msg.delete()
+        await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
+        return
     except Exception as e:
         logger.error(f"Ошибка при обработке фото: {e}")
         await processing_msg.delete()

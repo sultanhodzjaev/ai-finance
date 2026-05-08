@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import json
@@ -17,6 +18,10 @@ VALID_CATEGORIES = [
     "health", "clothes", "home", "communication", "gifts", "other"
 ]
 
+# Исключение для превышения лимита запросов — обрабатывается отдельно в хендлерах
+class RateLimitError(Exception):
+    pass
+
 
 def _api_key() -> str:
     key = os.getenv("GEMINI_API_KEY")
@@ -25,25 +30,37 @@ def _api_key() -> str:
     return key
 
 
-async def _generate(contents: list) -> str:
+async def _generate(contents: list, retries: int = 3) -> str:
     """
     Отправляет запрос к Gemini REST API и возвращает текст ответа.
-    Использует httpx напрямую — без SDK, без проблем с кодировкой.
+    При ошибке 429 (rate limit) делает до 3 повторных попыток с нарастающей задержкой.
     """
     payload = {"contents": contents}
     url = f"{GEMINI_API_URL}?key={_api_key()}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
+    for attempt in range(retries):
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if response.status_code == 429:
+            # Превышен лимит запросов — ждём и повторяем
+            wait = 5 * (attempt + 1)  # 5с, 10с, 15с
+            logger.warning(f"Rate limit 429, попытка {attempt + 1}/{retries}, жду {wait}с...")
+            if attempt < retries - 1:
+                await asyncio.sleep(wait)
+                continue
+            else:
+                raise RateLimitError("Превышен лимит запросов к Gemini API")
+
         response.raise_for_status()
         data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
-    # Извлекаем текст из структуры ответа
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    raise RateLimitError("Превышен лимит запросов к Gemini API")
 
 
 def _extract_json(text: str) -> dict:
