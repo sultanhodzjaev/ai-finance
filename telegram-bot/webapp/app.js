@@ -116,12 +116,14 @@ function destroyChart(key) {
 // ============================================================
 // ИНИЦИАЛИЗАЦИЯ
 // ============================================================
+function showApp(html) {
+    const loader = document.getElementById('static-loader');
+    const app    = document.getElementById('app');
+    if (loader) loader.style.display = 'none';
+    if (app)    { app.style.display = 'block'; app.innerHTML = html; }
+}
+
 async function init() {
-    document.getElementById('app').innerHTML = `
-        <div class="flex flex-col items-center justify-center min-h-screen">
-            <div class="text-6xl mb-3 animate-pulse">💰</div>
-            <p class="text-gray-400 text-sm">Загружаю данные...</p>
-        </div>`;
     try {
         const [me, catsR, txsR] = await Promise.all([
             api('GET', '/me'),
@@ -134,12 +136,12 @@ async function init() {
         state.transactions = txsR.transactions;
         render();
     } catch {
-        document.getElementById('app').innerHTML = `
+        showApp(`
             <div class="flex flex-col items-center justify-center min-h-screen p-8 text-center gap-4">
                 <div class="text-6xl">🤖</div>
                 <p class="font-semibold text-gray-800 text-lg">Нет доступа</p>
                 <p class="text-sm text-gray-500 max-w-xs">Открой приложение через кнопку <strong>«📲 Открыть приложение»</strong> в боте Telegram</p>
-            </div>`;
+            </div>`);
     }
 }
 
@@ -148,14 +150,14 @@ async function init() {
 // ============================================================
 function render() {
     ['donut-expense','donut-income','line-chart'].forEach(k => destroyChart(k));
-    document.getElementById('app').innerHTML = `
+    showApp(`
         <div class="pb-24 min-h-screen screen-enter">
             ${state.screen === 'dashboard' ? buildDashboard() : ''}
             ${state.screen === 'history'   ? buildHistory()   : ''}
             ${state.screen === 'add'       ? buildAdd()       : ''}
         </div>
         ${buildNav()}
-        ${buildBottomSheet()}`;
+        ${buildBottomSheet()}`);
     attachNavHandlers();
     if (state.screen === 'dashboard') renderCharts();
     if (state.screen === 'history')   attachHistoryHandlers();
