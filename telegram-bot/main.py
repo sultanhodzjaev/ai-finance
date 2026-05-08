@@ -1,6 +1,16 @@
 import asyncio
 import logging
 import os
+import sys
+
+# Принудительно выставляем UTF-8 для всех потоков ввода/вывода.
+# Это нужно потому что Gemini SDK использует ASCII-кодировку по умолчанию в Nix/Replit.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("LANG", "C.UTF-8")
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
