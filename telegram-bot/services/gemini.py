@@ -1,14 +1,16 @@
+import base64
 import io
 import json
 import logging
 import os
 import re
 
-from google import genai
-from google.genai import types
+import httpx
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 VALID_CATEGORIES = [
     "food", "groceries", "transport", "entertainment",
@@ -16,16 +18,36 @@ VALID_CATEGORIES = [
 ]
 
 
-def _get_client() -> genai.Client:
-    """Создаёт и возвращает клиент Gemini."""
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+def _api_key() -> str:
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
         raise ValueError("GEMINI_API_KEY не найден в переменных окружения")
-    return genai.Client(api_key=api_key)
+    return key
+
+
+async def _generate(contents: list) -> str:
+    """
+    Отправляет запрос к Gemini REST API и возвращает текст ответа.
+    Использует httpx напрямую — без SDK, без проблем с кодировкой.
+    """
+    payload = {"contents": contents}
+    url = f"{GEMINI_API_URL}?key={_api_key()}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    # Извлекаем текст из структуры ответа
+    return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def _extract_json(text: str) -> dict:
-    """Извлекает JSON из ответа модели — убирает markdown-обёртку если есть."""
+    """Извлекает JSON из ответа — убирает markdown-обёртку если есть."""
     text = re.sub(r"```(?:json)?\s*", "", text)
     text = re.sub(r"```\s*", "", text)
     return json.loads(text.strip())
@@ -33,48 +55,34 @@ def _extract_json(text: str) -> dict:
 
 async def categorize_text_transaction(user_message: str) -> dict:
     """
-    Отправляет текстовое сообщение в Gemini для категоризации как транзакции.
-    Возвращает dict: {amount, category, description, success} или {success: False, reason}.
+    Категоризирует текстовое сообщение пользователя как трату через Gemini.
+    Возвращает dict: {amount, category, description, success} или {success: False}.
     """
-    prompt = f"""Ты — AI-помощник для учёта личных финансов. Пользователь прислал сообщение о трате на русском языке.
-
-Твоя задача — извлечь из сообщения сумму, категорию и описание.
-
-Доступные категории (используй только эти id):
-- food (Еда — рестораны, кафе, обеды вне дома)
-- groceries (Продукты — покупки в магазинах для дома)
-- transport (Транспорт — такси, бензин, проезд)
-- entertainment (Развлечения — кино, концерты, бары)
-- health (Здоровье — врачи, лекарства, спортзал)
-- clothes (Одежда — одежда, обувь, аксессуары)
-- home (Жильё — аренда, коммуналка, ремонт)
-- communication (Связь — интернет, мобильная связь)
-- gifts (Подарки — подарки, благотворительность)
-- other (Другое — всё остальное)
-
-Сообщение пользователя: "{user_message}"
-
-Ответь СТРОГО в формате JSON, без пояснений и markdown:
-{{
-  "amount": число (сумма траты),
-  "category": "id_категории",
-  "description": "краткое описание (до 30 символов)",
-  "success": true
-}}
-
-Если не можешь определить трату (например, пользователь поздоровался или задал вопрос):
-{{
-  "success": false,
-  "reason": "не похоже на трату"
-}}"""
+    prompt = (
+        "Ты — AI-помощник для учёта личных финансов. "
+        "Пользователь прислал сообщение о трате на русском языке.\n\n"
+        "Твоя задача — извлечь из сообщения сумму, категорию и описание.\n\n"
+        "Доступные категории (используй только эти id):\n"
+        "- food (Еда — рестораны, кафе, обеды вне дома)\n"
+        "- groceries (Продукты — покупки в магазинах для дома)\n"
+        "- transport (Транспорт — такси, бензин, проезд)\n"
+        "- entertainment (Развлечения — кино, концерты, бары)\n"
+        "- health (Здоровье — врачи, лекарства, спортзал)\n"
+        "- clothes (Одежда — одежда, обувь, аксессуары)\n"
+        "- home (Жильё — аренда, коммуналка, ремонт)\n"
+        "- communication (Связь — интернет, мобильная связь)\n"
+        "- gifts (Подарки — подарки, благотворительность)\n"
+        "- other (Другое — всё остальное)\n\n"
+        f'Сообщение пользователя: "{user_message}"\n\n'
+        "Ответь СТРОГО в формате JSON, без пояснений и markdown:\n"
+        '{"amount": число, "category": "id_категории", "description": "краткое описание", "success": true}\n\n'
+        "Если не можешь определить трату (пользователь поздоровался или задал вопрос):\n"
+        '{"success": false, "reason": "не похоже на трату"}'
+    )
 
     try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        result = _extract_json(response.text)
+        text = await _generate([{"parts": [{"text": prompt}]}])
+        result = _extract_json(text)
 
         if result.get("success"):
             if result.get("category") not in VALID_CATEGORIES:
@@ -94,47 +102,36 @@ async def categorize_text_transaction(user_message: str) -> dict:
 
 async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
     """
-    Отправляет фото чека в Gemini для распознавания.
-    Возвращает dict: {amount, category, merchant, description, success} или {success: False, reason}.
+    Распознаёт чек на фото через Gemini Vision (multimodal).
+    Возвращает dict: {amount, category, merchant, description, success} или {success: False}.
     """
-    prompt = """Ты — AI-помощник для распознавания чеков. На фото — чек о покупке.
-
-Твоя задача — извлечь:
-- Общую сумму чека
-- Название магазина/заведения
-- Категорию (по типу заведения)
-- Краткое описание
-
-Доступные категории (только эти id):
-food, groceries, transport, entertainment, health, clothes, home, communication, gifts, other
-
-Ответь СТРОГО в формате JSON:
-{
-  "amount": число,
-  "category": "id_категории",
-  "merchant": "название магазина",
-  "description": "краткое описание чека",
-  "success": true
-}
-
-Если на фото не чек или невозможно распознать:
-{
-  "success": false,
-  "reason": "не удалось распознать чек"
-}"""
+    prompt = (
+        "Ты — AI-помощник для распознавания чеков. На фото — чек о покупке.\n\n"
+        "Извлеки: общую сумму, название магазина/заведения, категорию, краткое описание.\n\n"
+        "Доступные категории (только эти id):\n"
+        "food, groceries, transport, entertainment, health, clothes, home, communication, gifts, other\n\n"
+        "Ответь СТРОГО в формате JSON:\n"
+        '{"amount": число, "category": "id", "merchant": "название", "description": "описание", "success": true}\n\n'
+        "Если на фото не чек или невозможно распознать:\n"
+        '{"success": false, "reason": "не удалось распознать чек"}'
+    )
 
     try:
-        client = _get_client()
+        # Конвертируем фото в JPEG и кодируем в base64
         image = Image.open(io.BytesIO(photo_bytes))
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, format="JPEG")
+        image_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[
-                prompt,
-                image,
-            ],
-        )
-        result = _extract_json(response.text)
+        contents = [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+            ]
+        }]
+
+        text = await _generate(contents)
+        result = _extract_json(text)
 
         if result.get("success") and result.get("category") not in VALID_CATEGORIES:
             result["category"] = "other"
@@ -152,20 +149,22 @@ food, groceries, transport, entertainment, health, clothes, home, communication,
 async def ask_financial_advisor(
     user_question: str,
     currency: str,
-    transactions: list
+    transactions: list,
 ) -> str:
     """
-    Отправляет вопрос пользователя AI-финансисту вместе с контекстом его трат.
-    Возвращает текстовый ответ финансиста.
+    Отправляет вопрос пользователя AI-финансисту с контекстом его трат.
+    Возвращает текстовый ответ.
     """
     from datetime import datetime, timedelta
 
     if transactions:
-        transactions_list = "\n".join([
-            f"- {t['datetime'][:10]}: {t.get('description', '—')} | "
-            f"{t['amount']} {currency} | категория: {t['category']}"
-            for t in transactions[-100:]
-        ])
+        lines = []
+        for t in transactions[-100:]:
+            lines.append(
+                f"- {t['datetime'][:10]}: {t.get('description', '—')} | "
+                f"{t['amount']} {currency} | категория: {t['category']}"
+            )
+        transactions_list = "\n".join(lines)
     else:
         transactions_list = "Транзакций пока нет"
 
@@ -181,43 +180,30 @@ async def ask_financial_advisor(
             pass
 
     if categories_totals:
-        categories_stats = "\n".join([
+        cat_lines = [
             f"- {cat}: {amount:.0f} {currency}"
             for cat, amount in sorted(categories_totals.items(), key=lambda x: -x[1])
-        ])
+        ]
+        categories_stats = "\n".join(cat_lines)
     else:
         categories_stats = "Данных за последний месяц нет"
 
-    prompt = f"""Ты — личный AI-финансист пользователя. Твоя роль — давать практичные, дружелюбные и полезные советы о финансах на русском языке.
-
-Стиль общения:
-- Тёплый и дружеский, на "ты"
-- Без банковского официоза
-- Конкретика, цифры, проценты
-- Если уместно — добавь эмодзи (но не переборщи)
-- Короткие абзацы
-
-Данные пользователя:
-- Валюта: {currency}
-- Всего транзакций: {len(transactions)}
-
-Все траты пользователя:
-{transactions_list}
-
-Статистика по категориям за последний месяц:
-{categories_stats}
-
-Вопрос пользователя: "{user_question}"
-
-Дай развёрнутый ответ (3-7 предложений), который реально поможет пользователю. Если данных мало — честно скажи об этом. Если уместно — дай конкретный совет или рекомендацию."""
+    prompt = (
+        "Ты — личный AI-финансист пользователя. "
+        "Давай практичные, дружелюбные советы о финансах на русском языке. "
+        "Стиль: теплый, на 'ты', без официоза, с конкретными цифрами.\n\n"
+        f"Валюта пользователя: {currency}\n"
+        f"Всего транзакций: {len(transactions)}\n\n"
+        f"Все траты:\n{transactions_list}\n\n"
+        f"Статистика по категориям за последний месяц:\n{categories_stats}\n\n"
+        f'Вопрос пользователя: "{user_question}"\n\n'
+        "Дай развёрнутый ответ (3-7 предложений). "
+        "Если данных мало — честно скажи об этом. "
+        "Если уместно — дай конкретный совет."
+    )
 
     try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        return response.text.strip()
+        return await _generate([{"parts": [{"text": prompt}]}])
     except Exception as e:
         logger.error(f"Ошибка при запросе к AI-финансисту: {e}")
         raise
