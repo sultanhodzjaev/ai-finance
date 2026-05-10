@@ -52,7 +52,7 @@ async def run_api():
     """Запускает FastAPI-сервер для Mini App."""
     config = uvicorn.Config(
         fastapi_app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=FASTAPI_PORT,
         log_level="info",
     )
