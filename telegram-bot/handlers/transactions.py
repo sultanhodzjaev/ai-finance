@@ -10,13 +10,38 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
-from services import gemini, storage
+from services import gemini, plans, storage
 from services.gemini import RateLimitError
 from utils.categories import (
     CATEGORIES, INCOME_CATEGORIES,
     get_category, get_category_by_id, get_category_display,
 )
 from utils.formatters import format_amount
+
+
+def _check_action_limit(telegram_id: int, action: str) -> tuple[bool, str]:
+    """
+    Возвращает (allowed, deny_message). allowed=False → бот должен ответить deny_message и выйти.
+    action ∈ {"transaction", "photo", "ai_question"}.
+    """
+    user = storage.get_user(telegram_id) or {}
+    plan = plans.effective_plan(user)
+    limit = plans.limit_for(plan, action)
+
+    if action == "transaction":
+        used = storage.count_transactions_today(telegram_id, source="text")
+    elif action == "photo":
+        used = storage.count_transactions_today(telegram_id, source="photo")
+    elif action == "ai_question":
+        used = storage.count_events_today(telegram_id, "ai_question")
+    else:
+        used = 0
+
+    if limit == 0 or used >= limit:
+        storage.log_event(telegram_id, "limit_hit", {"action": action, "plan": plan, "used": used, "limit": limit})
+        return False, plans.deny_message(plan, action, used, limit)
+
+    return True, ""
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -91,6 +116,11 @@ async def handle_text_transaction(message: Message, state: FSMContext):
         first_name=user.first_name or "Друг",
     )
 
+    allowed, deny = _check_action_limit(user.id, "transaction")
+    if not allowed:
+        await message.answer(deny, parse_mode="HTML")
+        return
+
     processing_msg = await message.answer("🤔 Обрабатываю...")
 
     try:
@@ -147,6 +177,11 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
         username=user.username or "",
         first_name=user.first_name or "Друг",
     )
+
+    allowed, deny = _check_action_limit(user.id, "photo")
+    if not allowed:
+        await message.answer(deny, parse_mode="HTML")
+        return
 
     processing_msg = await message.answer("📷 Распознаю чек...")
 

@@ -30,3 +30,6 @@ create index if not exists idx_transactions_telegram_id
 -- Row Level Security (отключаем — доступ только через service_role из бота)
 alter table users        disable row level security;
 alter table transactions disable row level security;
+
+-- (миграция 002 — подписки) применяется через supabase_migrations/002_add_plans.sql
+

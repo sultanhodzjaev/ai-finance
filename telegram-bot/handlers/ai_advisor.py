@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
-from services import gemini, storage
+from services import gemini, plans, storage
 from services.gemini import RateLimitError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,16 @@ async def handle_advisor_question(message: Message, state: FSMContext):
         username=message.from_user.username or "",
         first_name=message.from_user.first_name or "Друг",
     )
+
+    plan = plans.effective_plan(user)
+    limit = plans.limit_for(plan, "ai_question")
+    used = storage.count_events_today(user_id, "ai_question")
+    if limit == 0 or used >= limit:
+        storage.log_event(user_id, "limit_hit", {"action": "ai_question", "plan": plan, "used": used, "limit": limit})
+        await message.answer(plans.deny_message(plan, "ai_question", used, limit), parse_mode="HTML")
+        await state.clear()
+        return
+
     transactions = storage.get_transactions(user_id)
     currency = user.get("currency", "KGS")
 
@@ -69,6 +79,7 @@ async def handle_advisor_question(message: Message, state: FSMContext):
 
     await thinking_msg.delete()
     await state.clear()
+    storage.log_event(user_id, "ai_question", {"plan": plan, "length": len(message.text or "")})
     await message.answer(answer)
 
 

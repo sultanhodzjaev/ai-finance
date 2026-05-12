@@ -5,7 +5,7 @@
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from supabase import create_client, Client
@@ -207,3 +207,93 @@ def _row_to_tx(row: dict) -> dict:
         # поле datetime — для обратной совместимости с хендлерами бота
         "datetime":    row.get("created_at", datetime.now().isoformat()),
     }
+
+
+# ---------------------------------------------------------------------------
+# Подписки и лимиты (миграция 002)
+# ---------------------------------------------------------------------------
+
+def _today_start_utc() -> str:
+    """Начало текущих суток по UTC в ISO-формате."""
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def count_transactions_today(telegram_id: int, source: str | None = None) -> int:
+    """Сколько транзакций у юзера за сегодня (UTC). Если задан source — фильтрует."""
+    try:
+        q = (
+            _client()
+            .table("transactions")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .gte("created_at", _today_start_utc())
+        )
+        if source is not None:
+            q = q.eq("source", source)
+        res = q.execute()
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_transactions_today({telegram_id}, {source}): {e}")
+        return 0
+
+
+def count_events_today(telegram_id: int, event_type: str) -> int:
+    """Сколько событий заданного типа у юзера за сегодня (UTC)."""
+    try:
+        res = (
+            _client()
+            .table("events")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .eq("type", event_type)
+            .gte("created_at", _today_start_utc())
+            .execute()
+        )
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_events_today({telegram_id}, {event_type}): {e}")
+        return 0
+
+
+def log_event(telegram_id: int, event_type: str, metadata: dict | None = None) -> None:
+    """Запись события в таблицу events (для подсчёта лимитов и аналитики)."""
+    try:
+        _client().table("events").insert({
+            "telegram_id": telegram_id,
+            "type":        event_type,
+            "metadata":    metadata or {},
+        }).execute()
+    except Exception as e:
+        logger.warning(f"log_event({telegram_id}, {event_type}): {e}")
+
+
+def update_user_plan(
+    telegram_id: int,
+    plan: str,
+    *,
+    subscription_until: datetime | None = None,
+    trial_until: datetime | None = None,
+) -> None:
+    """Обновляет план пользователя. None значения не трогаются."""
+    patch: dict = {"plan": plan}
+    if subscription_until is not None:
+        patch["subscription_until"] = subscription_until.isoformat()
+    if trial_until is not None:
+        patch["trial_until"] = trial_until.isoformat()
+    try:
+        _client().table("users").update(patch).eq("telegram_id", telegram_id).execute()
+    except Exception as e:
+        logger.error(f"update_user_plan({telegram_id}, {plan}): {e}")
+
+
+# Дефолтная регистрация юзера сейчас опирается на DEFAULT в схеме —
+# plan='trial', trial_until=now()+7d. Если по какой-то причине эти поля
+# не выставились (например, миграция ещё не применена), вернём sane defaults.
+def ensure_trial_defaults(user: dict) -> dict:
+    """Подстраховка: если в user нет колонок плана, добавляет дефолты в локальный dict."""
+    from datetime import timedelta
+    if not user.get("plan"):
+        user["plan"] = "trial"
+    if not user.get("trial_until"):
+        user["trial_until"] = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    return user
