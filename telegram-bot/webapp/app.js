@@ -992,29 +992,14 @@ function attachPlanHandlers() {
         btn.disabled = true;
         btn.innerHTML = 'Готовлю файл...';
         try {
-            const resp = await fetch('/miniapp/api/export.csv', {
-                headers: { 'X-Init-Data': tg?.initData || '' },
-            });
-            if (!resp.ok) {
-                const j = await resp.json().catch(() => ({}));
-                throw new Error(j.detail || `HTTP ${resp.status}`);
-            }
-            const blob = await resp.blob();
-            const url  = URL.createObjectURL(blob);
-            const a    = document.createElement('a');
-            a.href = url;
-            a.download = `ai-finansist-${new Date().toISOString().slice(0,10)}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-            if (tg?.showAlert) tg.showAlert('Файл загружен');
+            const r = await api('POST', '/export.csv');
+            const rows = r?.rows ?? 0;
+            if (tg?.showAlert) tg.showAlert(`✅ Файл отправлен тебе в чат с ботом (${rows} транзакций).`);
         } catch (e) {
-            if (tg?.showAlert) tg.showAlert(`Не удалось скачать: ${e.message}`);
+            if (tg?.showAlert) tg.showAlert(`Не удалось экспортировать: ${e.message}`);
         } finally {
             btn.disabled = false;
             btn.innerHTML = originalHTML;
-            // Обновим план чтобы счётчик использованных экспортов сдвинулся
             try { state.plan = await api('GET', '/plan'); } catch {}
         }
     });
