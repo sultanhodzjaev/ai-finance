@@ -48,6 +48,9 @@ def get_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📅 За сегодня", callback_data="show_today"),
             InlineKeyboardButton(text="❓ Помощь",     callback_data="show_help"),
         ],
+        [
+            InlineKeyboardButton(text="🎁 Пригласить друга +14 дней Premium", callback_data="show_invite"),
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
