@@ -85,6 +85,44 @@ async def daily_reminders(bot: Bot) -> None:
         logger.info(f"daily_reminders: sent={sent}")
 
 
+def _admin_id() -> int | None:
+    import os
+    raw = os.getenv("ADMIN_ID") or os.getenv("OWNER_ID")
+    try:
+        return int(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+# Чтобы не спамить админа одинаковыми алертами — запоминаем uid+час
+_abuse_alerted: set[str] = set()
+
+
+async def detect_abuse(bot: Bot) -> None:
+    """Если у юзера >5 limit_hit за последний час — уведомляем админа."""
+    admin = _admin_id()
+    if not admin:
+        return
+    suspicious = storage.find_users_with_many_limit_hits(within_hours=1, threshold=5)
+    hour_tag = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+    for s in suspicious:
+        uid = s["telegram_id"]
+        key = f"{uid}:{hour_tag}"
+        if key in _abuse_alerted:
+            continue
+        _abuse_alerted.add(key)
+        try:
+            await bot.send_message(
+                admin,
+                f"⚠️ <b>Подозрительная активность</b>\n\n"
+                f"Юзер <code>{uid}</code> упёрся в лимиты <b>{s['count']}</b> раз за последний час.\n"
+                f"Команды: <code>/ban {uid}</code> | <code>/unban {uid}</code>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning(f"abuse alert to admin failed: {e}")
+
+
 async def process_recurring_payments(bot: Bot) -> None:
     """Создаёт транзакции по всем due-регулярным платежам и переносит next_run_at."""
     created = 0
@@ -128,6 +166,7 @@ async def scheduler_loop(bot: Bot) -> None:
         try:
             await trial_sweep(bot)
             await process_recurring_payments(bot)
+            await detect_abuse(bot)
 
             now_utc = datetime.now(timezone.utc)
             today_utc = now_utc.date()

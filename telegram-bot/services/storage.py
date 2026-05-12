@@ -658,3 +658,101 @@ def reschedule_recurring_payment(rp_id: str, next_run_at: datetime) -> None:
         }).eq("id", rp_id).execute()
     except Exception as e:
         logger.error(f"reschedule_recurring_payment({rp_id}): {e}")
+
+
+# ---------------------------------------------------------------------------
+# Бан-список
+# ---------------------------------------------------------------------------
+
+def is_banned(telegram_id: int) -> bool:
+    try:
+        res = _client().table("banned_users").select("telegram_id") \
+            .eq("telegram_id", telegram_id).limit(1).execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"is_banned({telegram_id}): {e}")
+        return False
+
+
+def ban_user(telegram_id: int, reason: str = "", banned_by: int | None = None) -> bool:
+    try:
+        _client().table("banned_users").upsert({
+            "telegram_id": telegram_id,
+            "reason": reason[:200],
+            "banned_by": banned_by,
+        }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"ban_user({telegram_id}): {e}")
+        return False
+
+
+def unban_user(telegram_id: int) -> bool:
+    try:
+        res = _client().table("banned_users").delete().eq("telegram_id", telegram_id).execute()
+        return len(res.data or []) > 0
+    except Exception as e:
+        logger.error(f"unban_user({telegram_id}): {e}")
+        return False
+
+
+def find_users_with_many_limit_hits(within_hours: int = 1, threshold: int = 5) -> list[dict]:
+    """Возвращает [(telegram_id, count), ...] кого надо алертить — много limit_hit за окно."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=within_hours)).isoformat()
+    try:
+        res = _client().table("events").select("telegram_id") \
+            .eq("type", "limit_hit").gte("created_at", cutoff).execute()
+        from collections import Counter
+        c = Counter(r["telegram_id"] for r in (res.data or []))
+        return [{"telegram_id": uid, "count": n} for uid, n in c.items() if n >= threshold]
+    except Exception as e:
+        logger.error(f"find_users_with_many_limit_hits: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Аналитика для админ-команды
+# ---------------------------------------------------------------------------
+
+def admin_stats() -> dict:
+    """Сводка для админа: юзеры, транзакции, активность."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_ago = (now - timedelta(days=7)).isoformat()
+    try:
+        users_all   = _client().table("users").select("plan").execute().data or []
+        plans_cnt   = {}
+        for u in users_all:
+            plans_cnt[u["plan"]] = plans_cnt.get(u["plan"], 0) + 1
+        users_week  = _client().table("users").select("telegram_id", count="exact") \
+            .gte("created_at", week_ago).execute().count or 0
+
+        tx_total = _client().table("transactions").select("id", count="exact").execute().count or 0
+        tx_today = _client().table("transactions").select("id", count="exact") \
+            .gte("created_at", today).execute().count or 0
+        tx_week  = _client().table("transactions").select("id", count="exact") \
+            .gte("created_at", week_ago).execute().count or 0
+
+        limit_today = _client().table("events").select("id", count="exact") \
+            .eq("type", "limit_hit").gte("created_at", today).execute().count or 0
+        ai_today = _client().table("events").select("id", count="exact") \
+            .eq("type", "ai_question").gte("created_at", today).execute().count or 0
+        paid_total = _client().table("events").select("id", count="exact") \
+            .eq("type", "subscription_paid").execute().count or 0
+
+        return {
+            "users_total":   len(users_all),
+            "users_by_plan": plans_cnt,
+            "users_week":    users_week,
+            "tx_total":      tx_total,
+            "tx_today":      tx_today,
+            "tx_week":       tx_week,
+            "limit_today":   limit_today,
+            "ai_today":      ai_today,
+            "paid_total":    paid_total,
+        }
+    except Exception as e:
+        logger.error(f"admin_stats: {e}")
+        return {}

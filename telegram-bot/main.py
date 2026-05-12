@@ -16,6 +16,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals, categories, recurring
+from handlers import admin as admin_handlers
+from middleware import BanAndFloodMiddleware
 from api.server import app as fastapi_app
 from services.storage import init_db
 from services.scheduler import scheduler_loop
@@ -39,10 +41,14 @@ async def run_bot():
     bot = Bot(token=bot_token)
     dp  = Dispatcher(storage=MemoryStorage())
 
+    # Anti-flood + ban-check на каждое входящее сообщение
+    dp.message.middleware(BanAndFloodMiddleware())
+
     # Порядок роутеров важен: ai_advisor идёт до transactions;
     # payments — отдельным роутером, чтобы pre_checkout_query и successful_payment
-    # обрабатывались первыми.
+    # обрабатывались первыми. admin — рано, чтобы /ban /unban /admin_stats не съел кто-то ниже.
     dp.include_router(payments.router)
+    dp.include_router(admin_handlers.router)
     dp.include_router(start.router)
     dp.include_router(referrals.router)
     dp.include_router(categories.router)

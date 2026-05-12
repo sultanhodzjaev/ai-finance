@@ -100,6 +100,12 @@ async def _apply_referral(new_user_id: int, ref_param: str) -> tuple[bool, str |
 async def cmd_start(message: Message):
     """Обрабатывает /start — регистрирует пользователя, обрабатывает реферал, показывает меню."""
     user = message.from_user
+
+    # Защита от Telegram-ботов
+    if user.is_bot:
+        logger.info(f"start: ignoring Telegram bot user_id={user.id} username=@{user.username}")
+        return
+
     first_name = user.first_name or "Друг"
 
     storage.get_or_create_user(
