@@ -1032,28 +1032,48 @@ function buildUpgrade() {
     const premium = pricing.premium || { stars: 350, usd: 7 };
     const pro     = pricing.pro     || { stars: 750, usd: 15 };
 
-    const tierCard = (key, iconName, title, price, features, recommended) => `
-        <div class="bg-white rounded-2xl p-5 shadow-sm ${recommended ? 'ring-2 ring-indigo-500' : ''} mb-3 relative">
-            ${recommended ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full font-medium">Популярный</span>' : ''}
-            <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 ${recommended ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-700'} rounded-xl flex items-center justify-center">
-                        ${icon(iconName, 'w-5 h-5')}
-                    </div>
-                    <div>
-                        <p class="font-bold text-gray-900">${title}</p>
-                        <p class="text-xs text-gray-400">${price.stars}⭐ ≈ $${price.usd}/мес</p>
+    const currentPlan = state.plan?.plan;
+    const tierCard = (key, iconName, title, price, features, recommended) => {
+        const isCurrent = currentPlan === key;
+        const ringClass = isCurrent ? 'ring-2 ring-emerald-500'
+                        : recommended ? 'ring-2 ring-indigo-500'
+                        : '';
+        const badge = isCurrent
+            ? '<span class="absolute -top-2.5 left-4 bg-emerald-500 text-white text-xs px-2 py-0.5 rounded-full font-medium">Твой план</span>'
+            : recommended
+                ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full font-medium">Популярный</span>'
+                : '';
+        const iconBg = isCurrent ? 'bg-emerald-100 text-emerald-600'
+                    : recommended ? 'bg-indigo-100 text-indigo-600'
+                    : 'bg-gray-100 text-gray-700';
+        const cta = isCurrent
+            ? `<button class="w-full bg-gray-100 text-gray-500 py-2.5 rounded-xl font-semibold cursor-default" disabled>
+                   Это твой текущий тариф
+               </button>`
+            : `<button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
+                       data-tier="${key}" data-stars="${price.stars}">
+                   Купить за ${price.stars}⭐
+               </button>`;
+        return `
+            <div class="bg-white rounded-2xl p-5 shadow-sm ${ringClass} mb-3 relative">
+                ${badge}
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 ${iconBg} rounded-xl flex items-center justify-center">
+                            ${icon(iconName, 'w-5 h-5')}
+                        </div>
+                        <div>
+                            <p class="font-bold text-gray-900">${title}</p>
+                            <p class="text-xs text-gray-400">${price.stars}⭐ ≈ $${price.usd}/мес</p>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <ul class="text-sm text-gray-700 space-y-1.5 mb-4">
-                ${features.map(f => `<li class="flex items-start gap-2">${icon('check', 'w-4 h-4 text-green-500 mt-0.5 flex-shrink-0')}<span>${f}</span></li>`).join('')}
-            </ul>
-            <button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
-                    data-tier="${key}" data-stars="${price.stars}">
-                Купить за ${price.stars}⭐
-            </button>
-        </div>`;
+                <ul class="text-sm text-gray-700 space-y-1.5 mb-4">
+                    ${features.map(f => `<li class="flex items-start gap-2">${icon('check', 'w-4 h-4 text-green-500 mt-0.5 flex-shrink-0')}<span>${f}</span></li>`).join('')}
+                </ul>
+                ${cta}
+            </div>`;
+    };
 
     return `
         <div class="px-4 pt-5 pb-6">
