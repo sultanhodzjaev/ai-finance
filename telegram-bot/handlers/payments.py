@@ -1,7 +1,9 @@
 """Telegram Stars-платежи: pre_checkout, successful_payment, активация подписки."""
 import logging
+import os
 
 from aiogram import Bot, Router, F
+from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, PreCheckoutQuery, LabeledPrice,
 )
@@ -13,6 +15,14 @@ router = Router()
 
 # Сколько дней даёт одна покупка
 SUBSCRIPTION_DAYS = 30
+
+
+def _admin_id() -> int | None:
+    raw = os.getenv("ADMIN_ID") or os.getenv("OWNER_ID")
+    try:
+        return int(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _payload_for(tier: str, user_id: int) -> str:
@@ -138,3 +148,81 @@ async def on_successful_payment(message: Message):
         f"Все новые лимиты доступны прямо сейчас. Открой /plan чтобы посмотреть.",
         parse_mode="HTML",
     )
+
+    # Уведомление админу о покупке
+    admin = _admin_id()
+    if admin and admin != message.from_user.id:
+        u = message.from_user
+        uname = f"@{u.username}" if u.username else "(без username)"
+        nett = int(sp.total_amount * 0.7)  # ~70% нетто после комиссии Stars 30%
+        try:
+            await message.bot.send_message(
+                admin,
+                f"💸 <b>Новая подписка</b>\n\n"
+                f"Юзер: {u.full_name} {uname}\n"
+                f"ID: <code>{u.id}</code>\n"
+                f"План: {plan_title}\n"
+                f"Сумма: {sp.total_amount}⭐ (≈{nett}⭐ нетто)\n"
+                f"Срок: 30 дней",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning(f"admin notify failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# /balance — баланс Stars и история (только для админа)
+# ---------------------------------------------------------------------------
+
+@router.message(Command("balance"))
+async def cmd_balance(message: Message):
+    """Показывает текущий баланс Stars бота и последние 10 транзакций. Только админ."""
+    admin = _admin_id()
+    if not admin or message.from_user.id != admin:
+        return  # Молча игнорируем
+
+    import httpx
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        await message.answer("BOT_TOKEN не настроен.")
+        return
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            balance_r = await client.post(f"https://api.telegram.org/bot{token}/getMyStarBalance")
+            bal_json = balance_r.json()
+            balance = bal_json.get("result", {}).get("amount", 0) if bal_json.get("ok") else None
+        except Exception as e:
+            balance = None
+            logger.warning(f"getMyStarBalance: {e}")
+
+        try:
+            tx_r = await client.post(
+                f"https://api.telegram.org/bot{token}/getStarTransactions",
+                json={"limit": 10},
+            )
+            tx_json = tx_r.json()
+            txs = tx_json.get("result", {}).get("transactions", []) if tx_json.get("ok") else []
+        except Exception as e:
+            txs = []
+            logger.warning(f"getStarTransactions: {e}")
+
+    lines = [f"⭐ <b>Баланс Stars:</b> {balance if balance is not None else '—'}"]
+    if txs:
+        lines.append("\n<b>Последние 10 транзакций:</b>")
+        for t in txs[:10]:
+            amount = t.get("amount", 0)
+            date = t.get("date", 0)
+            from datetime import datetime, timezone
+            dstr = datetime.fromtimestamp(date, tz=timezone.utc).strftime("%Y-%m-%d %H:%M") if date else "—"
+            src = t.get("source", {}).get("type", "") or t.get("receiver", {}).get("type", "") or ""
+            sign = "+" if amount > 0 else ""
+            lines.append(f"  {dstr} · {sign}{amount}⭐ · {src}")
+    else:
+        lines.append("\nПока нет транзакций.")
+
+    lines.append(
+        "\n💡 Чтобы вывести: @BotFather → /mybots → @smartcash_ai_bot → "
+        "Bot Settings → Payments → Withdraw."
+    )
+    await message.answer("\n".join(lines), parse_mode="HTML")
