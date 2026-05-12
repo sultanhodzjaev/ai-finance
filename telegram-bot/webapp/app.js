@@ -33,11 +33,12 @@ function catColor(id) {
 // СОСТОЯНИЕ
 // ============================================================
 const state = {
-    screen:           'dashboard',
+    screen:           'dashboard',         // 'dashboard'|'history'|'add'|'plan'|'upgrade'
     me:               null,
     expenseCategories: [],
     incomeCategories:  [],
     transactions:      [],
+    plan:              null,                // данные от /miniapp/api/plan
     periodFilter:     'month',   // 'day'|'week'|'month'|'all'
     typeFilter:       'all',     // 'all'|'income'|'expense'
     selectedTx:       null,
@@ -125,15 +126,17 @@ function showApp(html) {
 
 async function init() {
     try {
-        const [me, catsR, txsR] = await Promise.all([
+        const [me, catsR, txsR, planR] = await Promise.all([
             api('GET', '/me'),
             api('GET', '/categories'),
             api('GET', '/transactions'),
+            api('GET', '/plan').catch(() => null),  // тариф необязателен — старые версии бэка не имеют
         ]);
         state.me = me;
         state.expenseCategories = catsR.expense_categories;
         state.incomeCategories  = catsR.income_categories;
         state.transactions = txsR.transactions;
+        state.plan = planR;
         render();
     } catch {
         showApp(`
@@ -155,13 +158,17 @@ function render() {
             ${state.screen === 'dashboard' ? buildDashboard() : ''}
             ${state.screen === 'history'   ? buildHistory()   : ''}
             ${state.screen === 'add'       ? buildAdd()       : ''}
+            ${state.screen === 'plan'      ? buildPlan()      : ''}
+            ${state.screen === 'upgrade'   ? buildUpgrade()   : ''}
         </div>
         ${buildNav()}
         ${buildBottomSheet()}`);
     attachNavHandlers();
-    if (state.screen === 'dashboard') renderCharts();
+    if (state.screen === 'dashboard') { renderCharts(); attachPlanWidgetHandlers(); }
     if (state.screen === 'history')   attachHistoryHandlers();
     if (state.screen === 'add')       attachAddHandlers();
+    if (state.screen === 'plan')      attachPlanHandlers();
+    if (state.screen === 'upgrade')   attachUpgradeHandlers();
     if (state.selectedTx)             attachSheetHandlers();
 }
 
@@ -169,22 +176,28 @@ function render() {
 // НАВИГАЦИЯ
 // ============================================================
 function buildNav() {
-    const d = state.screen === 'dashboard', h = state.screen === 'history';
+    const d = state.screen === 'dashboard',
+          h = state.screen === 'history',
+          p = state.screen === 'plan' || state.screen === 'upgrade';
     return `
         <nav class="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-100
-                    flex items-center justify-around px-2 py-1 z-40 shadow-lg"
+                    flex items-center justify-around px-1 py-1 z-40 shadow-lg"
              style="padding-bottom:max(env(safe-area-inset-bottom),4px)">
-            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-5 rounded-xl
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
                            ${d ? 'text-indigo-600' : 'text-gray-400'}" data-screen="dashboard">
                 <span class="text-2xl">📊</span><span class="text-xs font-medium">Дашборд</span>
             </button>
-            <button class="nav-btn flex flex-col items-center py-1 px-5" data-screen="add">
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
+                           ${h ? 'text-indigo-600' : 'text-gray-400'}" data-screen="history">
+                <span class="text-2xl">📜</span><span class="text-xs font-medium">История</span>
+            </button>
+            <button class="nav-btn flex flex-col items-center py-1 px-3" data-screen="add">
                 <span class="bg-indigo-600 text-white text-3xl rounded-full w-12 h-12
                              flex items-center justify-center shadow-md leading-none">+</span>
             </button>
-            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-5 rounded-xl
-                           ${h ? 'text-indigo-600' : 'text-gray-400'}" data-screen="history">
-                <span class="text-2xl">📜</span><span class="text-xs font-medium">История</span>
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
+                           ${p ? 'text-indigo-600' : 'text-gray-400'}" data-screen="plan">
+                <span class="text-2xl">💎</span><span class="text-xs font-medium">План</span>
             </button>
         </nav>`;
 }
@@ -229,6 +242,8 @@ function buildDashboard() {
                 </div>
                 <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-xl">💰</div>
             </div>
+
+            ${buildPlanWidget()}
 
             <!-- 3 карточки: доходы / расходы / остаток -->
             <div class="grid grid-cols-1 gap-3 mb-4">
@@ -724,6 +739,249 @@ function attachEditHandlers() {
             if(tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
             if (btn) { btn.disabled=false; btn.textContent='Сохранить'; }
         }
+    });
+}
+
+// ============================================================
+// ТАРИФЫ И ПЛАН
+// ============================================================
+const PLAN_VISUAL = {
+    trial:   { icon: '🎁', title: 'Trial',   subtitle: 'Полная пробная неделя' },
+    free:    { icon: '🆓', title: 'Free',    subtitle: 'Бесплатно навсегда' },
+    premium: { icon: '💎', title: 'Premium', subtitle: '$7 в месяц' },
+    pro:     { icon: '🚀', title: 'Pro',     subtitle: '$15 в месяц' },
+};
+
+function fmtPlanTimeLeft(planData) {
+    if (!planData) return '';
+    const target = planData.plan === 'trial' ? planData.trial_until : planData.subscription_until;
+    if (planData.plan === 'free') return 'Бесплатный режим';
+    if (!target) return 'Бессрочно';
+    const t = new Date(target);
+    const secs = (t - new Date()) / 1000;
+    if (secs <= 0) return 'истёк';
+    if (secs >= 86400) return `${Math.floor(secs/86400)} дн.`;
+    if (secs >= 3600)  return `${Math.floor(secs/3600)} ч.`;
+    return `${Math.max(1, Math.floor(secs/60))} мин.`;
+}
+
+function buildPlanWidget() {
+    if (!state.plan) return '';
+    const p   = state.plan;
+    const v   = PLAN_VISUAL[p.plan] || PLAN_VISUAL.free;
+    const tx  = p.usage?.transaction;
+    const ph  = p.usage?.photo;
+    const ai  = p.usage?.ai_question;
+    const periodWord = (u) => u?.period === 'day' ? 'сегодня' : 'за месяц';
+    const lineHTML = (label, u) => {
+        if (!u || u.limit === 0) return `<span class="text-white/50">${label}: —</span>`;
+        const pct = Math.min(100, Math.round((u.used / u.limit) * 100));
+        const colour = pct >= 90 ? 'bg-red-300' : pct >= 60 ? 'bg-yellow-200' : 'bg-white/70';
+        return `
+            <div class="flex items-center justify-between text-xs">
+                <span class="text-white/80">${label} ${periodWord(u)}</span>
+                <span class="text-white font-semibold">${u.used}/${u.limit}</span>
+            </div>
+            <div class="h-1 bg-white/20 rounded-full overflow-hidden mb-2">
+                <div class="${colour} h-full" style="width:${pct}%"></div>
+            </div>`;
+    };
+    return `
+        <div id="plan-widget" class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl
+                                     p-4 text-white shadow-md mb-4 cursor-pointer">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-2xl">${v.icon}</span>
+                    <div>
+                        <p class="font-bold leading-tight">${v.title}</p>
+                        <p class="text-white/70 text-xs">${fmtPlanTimeLeft(p)}</p>
+                    </div>
+                </div>
+                <span class="text-white/80 text-xs">Подробнее →</span>
+            </div>
+            ${lineHTML('Транзакции', tx)}
+            ${lineHTML('Фото чека', ph)}
+            ${lineHTML('AI-финансист', ai)}
+        </div>`;
+}
+
+function attachPlanWidgetHandlers() {
+    document.getElementById('plan-widget')?.addEventListener('click', () => {
+        state.screen = 'plan';
+        render();
+    });
+}
+
+function buildPlan() {
+    if (!state.plan) {
+        return `
+            <div class="px-4 pt-6">
+                <p class="text-gray-500">Не удалось загрузить данные плана. Попробуй открыть приложение заново.</p>
+            </div>`;
+    }
+    const p = state.plan;
+    const v = PLAN_VISUAL[p.plan] || PLAN_VISUAL.free;
+
+    const row = (label, action) => {
+        const u = p.usage?.[action];
+        const period = u?.period === 'day' ? 'сегодня' : 'в этом месяце';
+        if (!u || u.limit === 0) {
+            return `
+                <div class="flex justify-between items-center py-3 border-b border-gray-100">
+                    <span class="text-gray-700">${label}</span>
+                    <span class="text-gray-400 text-sm">недоступно</span>
+                </div>`;
+        }
+        const pct = Math.min(100, Math.round((u.used / u.limit) * 100));
+        const colour = pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-indigo-500';
+        return `
+            <div class="py-3 border-b border-gray-100">
+                <div class="flex justify-between items-center mb-1.5">
+                    <span class="text-gray-700">${label}</span>
+                    <span class="text-sm font-semibold text-gray-900">${u.used}/${u.limit} ${period}</span>
+                </div>
+                <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div class="${colour} h-full" style="width:${pct}%"></div>
+                </div>
+            </div>`;
+    };
+
+    const limits = p.limits || {};
+    const staticRow = (label, value) => `
+        <div class="flex justify-between items-center py-2.5 border-b border-gray-100">
+            <span class="text-gray-700">${label}</span>
+            <span class="text-sm font-semibold text-gray-900">${value}</span>
+        </div>`;
+
+    const upgradeBtn =
+        p.plan === 'pro' ? '' :
+        `<button id="open-upgrade-btn"
+                 class="w-full bg-indigo-600 text-white py-3 rounded-2xl font-semibold shadow-md mt-4 active:scale-95 transition">
+            ${p.plan === 'free' ? '✨ Попробовать Premium' :
+             p.plan === 'trial' ? '💎 Купить подписку' :
+             '🚀 Поднять до Pro'}
+        </button>`;
+
+    return `
+        <div class="px-4 pt-5 pb-6">
+            <div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl p-5 text-white shadow-md mb-4">
+                <div class="flex items-center gap-3 mb-1">
+                    <span class="text-3xl">${v.icon}</span>
+                    <div>
+                        <p class="text-xl font-bold">${v.title}</p>
+                        <p class="text-white/80 text-sm">${v.subtitle}</p>
+                    </div>
+                </div>
+                <p class="text-white/70 text-xs mt-2">${fmtPlanTimeLeft(p)}</p>
+            </div>
+
+            <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
+                <h2 class="font-semibold text-gray-700 mb-1 text-sm">Использование сейчас</h2>
+                ${row('Транзакции', 'transaction')}
+                ${row('Фото чеков', 'photo')}
+                ${row('AI-финансист', 'ai_question')}
+                ${row('Голосовые', 'voice')}
+            </div>
+
+            <div class="bg-white rounded-2xl p-4 shadow-sm">
+                <h2 class="font-semibold text-gray-700 mb-1 text-sm">Возможности плана</h2>
+                ${staticRow('История', limits.history_days ? `${limits.history_days} дн.` : 'вся')}
+                ${staticRow('Категорий', limits.categories_max || '—')}
+                ${staticRow('Регулярных платежей', limits.recurring_payments_max || '—')}
+                ${staticRow('Импорт CSV', limits.csv_import ? '✅' : '❌')}
+                ${staticRow('Экспорт', limits.exports_per_month != null ? `${limits.exports_per_month}/мес` :
+                            limits.exports_total != null ? `${limits.exports_total} за триал` : '—')}
+                ${staticRow('Mini App аналитика', limits.mini_app_analytics === 'full' ? 'Полная' : 'Базовая')}
+            </div>
+
+            ${upgradeBtn}
+        </div>`;
+}
+
+function attachPlanHandlers() {
+    document.getElementById('open-upgrade-btn')?.addEventListener('click', () => {
+        state.screen = 'upgrade';
+        render();
+    });
+}
+
+function buildUpgrade() {
+    if (!state.plan) return '<div class="px-4 pt-6 text-gray-500">Загрузка...</div>';
+    const pricing = state.plan.pricing || {};
+    const premium = pricing.premium || { stars: 350, usd: 7 };
+    const pro     = pricing.pro     || { stars: 750, usd: 15 };
+
+    const tierCard = (key, icon, title, price, features, recommended) => `
+        <div class="bg-white rounded-2xl p-5 shadow-sm ${recommended ? 'ring-2 ring-indigo-500' : ''} mb-3 relative">
+            ${recommended ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full">Популярный</span>' : ''}
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-2xl">${icon}</span>
+                    <div>
+                        <p class="font-bold text-gray-900">${title}</p>
+                        <p class="text-xs text-gray-400">${price.stars}⭐ ≈ $${price.usd}/мес</p>
+                    </div>
+                </div>
+            </div>
+            <ul class="text-sm text-gray-700 space-y-1.5 mb-4">
+                ${features.map(f => `<li class="flex items-start gap-2"><span class="text-green-500">✓</span><span>${f}</span></li>`).join('')}
+            </ul>
+            <button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
+                    data-tier="${key}" data-stars="${price.stars}">
+                Купить за ${price.stars}⭐
+            </button>
+        </div>`;
+
+    return `
+        <div class="px-4 pt-5 pb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h1 class="text-2xl font-bold text-gray-900">Поднять план</h1>
+                <button id="back-to-plan" class="text-indigo-600 text-sm">← План</button>
+            </div>
+
+            ${tierCard('premium', '💎', 'Premium', premium, [
+                '17 трат / день (≈500/мес)',
+                '300 вопросов AI-финансисту в месяц',
+                '30 фото чеков в месяц',
+                'Голос: 60/мес',
+                'История 12 месяцев',
+                'Импорт CSV и экспорт (3/мес)',
+            ], true)}
+
+            ${tierCard('pro', '🚀', 'Pro', pro, [
+                '100 трат / день (≈3000/мес)',
+                '1500 вопросов AI-финансисту в месяц',
+                '150 фото чеков в месяц',
+                'Голос: 200/мес',
+                'История 24 месяца, 100 категорий',
+                'Экспорт 10/мес',
+            ], false)}
+
+            <p class="text-xs text-gray-400 text-center mt-4">
+                Оплата через Telegram Stars. Подключение в работе — кнопки временно открывают подтверждение.
+            </p>
+        </div>`;
+}
+
+function attachUpgradeHandlers() {
+    document.getElementById('back-to-plan')?.addEventListener('click', () => {
+        state.screen = 'plan';
+        render();
+    });
+    document.querySelectorAll('.upgrade-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tier  = btn.dataset.tier;
+            const stars = btn.dataset.stars;
+            // TODO: следующим коммитом — Telegram.WebApp.openInvoice(url) после генерации invoice на бэке.
+            if (tg?.showAlert) {
+                tg.showAlert(
+                    `Оплата ${tier === 'pro' ? 'Pro' : 'Premium'} за ${stars}⭐ скоро будет доступна. ` +
+                    `Платежи через Telegram Stars подключаются на этой неделе.`
+                );
+            } else {
+                alert(`Оплата ${tier} за ${stars}⭐ скоро будет доступна.`);
+            }
+        });
     });
 }
 
