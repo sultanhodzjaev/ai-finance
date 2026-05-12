@@ -85,10 +85,40 @@ async def daily_reminders(bot: Bot) -> None:
         logger.info(f"daily_reminders: sent={sent}")
 
 
+async def process_recurring_payments(bot: Bot) -> None:
+    """Создаёт транзакции по всем due-регулярным платежам и переносит next_run_at."""
+    created = 0
+    for rp in storage.find_due_recurring_payments():
+        try:
+            storage.add_transaction(rp["telegram_id"], {
+                "type":        rp["type"],
+                "amount":      float(rp["amount"]),
+                "category":    rp["category"],
+                "description": rp["description"] or "Регулярный платёж",
+                "merchant":    None,
+                "source":      "recurring",
+                "datetime":    datetime.now(timezone.utc).isoformat(),
+            })
+            next_at = datetime.now(timezone.utc) + timedelta(days=int(rp["period_days"]))
+            storage.reschedule_recurring_payment(rp["id"], next_at)
+            await _send_safe(
+                bot, rp["telegram_id"],
+                f"🔁 Регулярный {'доход' if rp['type'] == 'income' else 'расход'}: "
+                f"<b>{rp['amount']}</b> «{rp['description'] or rp['category']}». "
+                f"Следующий: {next_at.strftime('%Y-%m-%d')}."
+            )
+            created += 1
+        except Exception as e:
+            logger.error(f"recurring process {rp.get('id')}: {e}")
+    if created:
+        logger.info(f"process_recurring_payments: created={created}")
+
+
 async def scheduler_loop(bot: Bot) -> None:
     """
     Главный цикл планировщика. Тикает раз в минуту.
-    - trial_sweep — каждый тик (внутри сам ничего не делает, если некому слать)
+    - trial_sweep — каждый тик
+    - process_recurring_payments — каждый тик
     - daily_reminders — один раз в день в 21:00 Asia/Bishkek (15:00 UTC)
     """
     logger.info("scheduler_loop: started")
@@ -97,6 +127,7 @@ async def scheduler_loop(bot: Bot) -> None:
     while True:
         try:
             await trial_sweep(bot)
+            await process_recurring_payments(bot)
 
             now_utc = datetime.now(timezone.utc)
             today_utc = now_utc.date()

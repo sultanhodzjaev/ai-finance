@@ -163,11 +163,22 @@ async def get_stats(x_init_data: str = Header(...)):
 
 @router.get("/categories")
 async def list_categories(x_init_data: str = Header(...)):
-    """Списки категорий расходов и доходов."""
-    require_auth(x_init_data)
+    """Списки категорий расходов и доходов: встроенные + кастомные пользователя."""
+    from services import storage
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    customs = storage.get_custom_categories(telegram_id)
+    custom_expense = [
+        {"id": c["id"], "name": c["name"], "emoji": c["emoji"], "custom": True}
+        for c in customs if c["type"] == "expense"
+    ]
+    custom_income = [
+        {"id": c["id"], "name": c["name"], "emoji": c["emoji"], "custom": True}
+        for c in customs if c["type"] == "income"
+    ]
     return {
-        "expense_categories": CATEGORIES,
-        "income_categories":  INCOME_CATEGORIES,
+        "expense_categories": CATEGORIES + custom_expense,
+        "income_categories":  INCOME_CATEGORIES + custom_income,
     }
 
 

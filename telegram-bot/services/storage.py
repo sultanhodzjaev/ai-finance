@@ -526,3 +526,135 @@ def find_users_without_transactions_today() -> list[dict]:
     except Exception as e:
         logger.error(f"find_users_without_transactions_today: {e}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Кастомные категории
+# ---------------------------------------------------------------------------
+
+def get_custom_categories(telegram_id: int, type: str | None = None) -> list:
+    """Возвращает кастомные категории пользователя."""
+    try:
+        q = _client().table("custom_categories").select("*").eq("telegram_id", telegram_id).order("created_at")
+        if type in ("expense", "income"):
+            q = q.eq("type", type)
+        res = q.execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"get_custom_categories({telegram_id}): {e}")
+        return []
+
+
+def count_custom_categories(telegram_id: int) -> int:
+    try:
+        res = _client().table("custom_categories").select("id", count="exact").eq("telegram_id", telegram_id).execute()
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_custom_categories({telegram_id}): {e}")
+        return 0
+
+
+def add_custom_category(telegram_id: int, name: str, emoji: str, type_: str) -> dict | None:
+    """Создаёт кастомную категорию. Возвращает созданную запись или None."""
+    if type_ not in ("expense", "income"):
+        return None
+    try:
+        res = _client().table("custom_categories").insert({
+            "telegram_id": telegram_id,
+            "name":        name.strip()[:50],
+            "emoji":       (emoji or "📦").strip()[:8],
+            "type":        type_,
+        }).execute()
+        return (res.data or [None])[0]
+    except Exception as e:
+        logger.error(f"add_custom_category({telegram_id}, {name}): {e}")
+        return None
+
+
+def delete_custom_category(telegram_id: int, cat_id: str) -> bool:
+    try:
+        res = _client().table("custom_categories").delete() \
+            .eq("id", cat_id).eq("telegram_id", telegram_id).execute()
+        return len(res.data or []) > 0
+    except Exception as e:
+        logger.error(f"delete_custom_category({cat_id}): {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Регулярные платежи
+# ---------------------------------------------------------------------------
+
+def get_recurring_payments(telegram_id: int, only_active: bool = True) -> list:
+    try:
+        q = _client().table("recurring_payments").select("*").eq("telegram_id", telegram_id).order("created_at")
+        if only_active:
+            q = q.eq("active", True)
+        res = q.execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"get_recurring_payments({telegram_id}): {e}")
+        return []
+
+
+def count_recurring_payments(telegram_id: int) -> int:
+    try:
+        res = _client().table("recurring_payments").select("id", count="exact") \
+            .eq("telegram_id", telegram_id).eq("active", True).execute()
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_recurring_payments({telegram_id}): {e}")
+        return 0
+
+
+def add_recurring_payment(telegram_id: int, *, type_: str, amount: float, category: str,
+                          description: str, period_days: int, first_run_at: datetime) -> dict | None:
+    if type_ not in ("expense", "income"):
+        return None
+    try:
+        res = _client().table("recurring_payments").insert({
+            "telegram_id": telegram_id,
+            "type":        type_,
+            "amount":      float(amount),
+            "category":    category,
+            "description": description[:200],
+            "period_days": int(period_days),
+            "next_run_at": first_run_at.isoformat(),
+            "active":      True,
+        }).execute()
+        return (res.data or [None])[0]
+    except Exception as e:
+        logger.error(f"add_recurring_payment({telegram_id}): {e}")
+        return None
+
+
+def delete_recurring_payment(telegram_id: int, rp_id: str) -> bool:
+    try:
+        res = _client().table("recurring_payments").delete() \
+            .eq("id", rp_id).eq("telegram_id", telegram_id).execute()
+        return len(res.data or []) > 0
+    except Exception as e:
+        logger.error(f"delete_recurring_payment({rp_id}): {e}")
+        return False
+
+
+def find_due_recurring_payments() -> list:
+    """Все активные регулярные платежи, у которых next_run_at <= сейчас."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        res = _client().table("recurring_payments").select("*") \
+            .eq("active", True).lte("next_run_at", now).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"find_due_recurring_payments: {e}")
+        return []
+
+
+def reschedule_recurring_payment(rp_id: str, next_run_at: datetime) -> None:
+    try:
+        _client().table("recurring_payments").update({
+            "next_run_at": next_run_at.isoformat(),
+            "last_run_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", rp_id).execute()
+    except Exception as e:
+        logger.error(f"reschedule_recurring_payment({rp_id}): {e}")
