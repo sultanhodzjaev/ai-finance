@@ -956,7 +956,7 @@ function buildUpgrade() {
             ], false)}
 
             <p class="text-xs text-gray-400 text-center mt-4">
-                Оплата через Telegram Stars. Подключение в работе — кнопки временно открывают подтверждение.
+                Оплата через Telegram Stars. Подписка продлевается на 30 дней с момента покупки.
             </p>
         </div>`;
 }
@@ -967,17 +967,46 @@ function attachUpgradeHandlers() {
         render();
     });
     document.querySelectorAll('.upgrade-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const tier  = btn.dataset.tier;
             const stars = btn.dataset.stars;
-            // TODO: следующим коммитом — Telegram.WebApp.openInvoice(url) после генерации invoice на бэке.
-            if (tg?.showAlert) {
-                tg.showAlert(
-                    `Оплата ${tier === 'pro' ? 'Pro' : 'Premium'} за ${stars}⭐ скоро будет доступна. ` +
-                    `Платежи через Telegram Stars подключаются на этой неделе.`
-                );
-            } else {
-                alert(`Оплата ${tier} за ${stars}⭐ скоро будет доступна.`);
+            const tierTitle = tier === 'pro' ? 'Pro' : 'Premium';
+
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = 'Подготавливаю оплату...';
+
+            try {
+                const { invoice_link } = await api('POST', '/upgrade/invoice', { tier });
+
+                if (!tg?.openInvoice) {
+                    if (tg?.showAlert) tg.showAlert(
+                        'Открой Mini App через кнопку в боте — встроенная оплата работает только там.'
+                    );
+                    return;
+                }
+
+                tg.openInvoice(invoice_link, async (status) => {
+                    if (status === 'paid') {
+                        // Перезагружаем данные плана и переходим на экран /plan
+                        try {
+                            state.plan = await api('GET', '/plan');
+                        } catch {}
+                        state.screen = 'plan';
+                        render();
+                        if (tg?.showAlert) tg.showAlert(`Подписка ${tierTitle} активирована 🎉`);
+                    } else if (status === 'failed') {
+                        if (tg?.showAlert) tg.showAlert('Оплата не прошла. Попробуй ещё раз.');
+                    } else if (status === 'cancelled') {
+                        // Тихо — юзер закрыл диалог
+                    }
+                });
+            } catch (e) {
+                if (tg?.showAlert) tg.showAlert(`Не удалось создать счёт: ${e.message}`);
+                else alert(`Ошибка: ${e.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
             }
         });
     });

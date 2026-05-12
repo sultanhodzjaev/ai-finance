@@ -146,7 +146,7 @@ async def cmd_upgrade(message: Message):
         "  • Голос: 200/мес\n"
         "  • История: 24 мес\n"
         "  • Экспорт (10 в мес), 100 категорий\n\n"
-        "⚙️ Оплата в Telegram Stars подключается на днях — следи за обновлениями.",
+        "💫 Оплата — в Telegram Stars. Подписка на 30 дней.",
         parse_mode="HTML",
         reply_markup=_upgrade_keyboard(),
     )

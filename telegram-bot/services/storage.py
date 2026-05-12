@@ -340,3 +340,34 @@ def count_events_this_month(telegram_id: int, event_type: str) -> int:
     except Exception as e:
         logger.error(f"count_events_this_month({telegram_id}, {event_type}): {e}")
         return 0
+
+
+def activate_subscription(telegram_id: int, plan: str, days: int = 30) -> dict | None:
+    """
+    Активирует подписку: ставит plan, продлевает subscription_until на `days`
+    от ТЕКУЩЕГО значения (если оно ещё в будущем) или от сейчас. Возвращает
+    обновлённого пользователя.
+    """
+    from datetime import timedelta
+    user = get_user(telegram_id) or {}
+    now = datetime.now(timezone.utc)
+    current_str = user.get("subscription_until")
+    base = now
+    if current_str:
+        try:
+            cur = datetime.fromisoformat(str(current_str).replace("Z", "+00:00"))
+            if cur.tzinfo is None:
+                cur = cur.replace(tzinfo=timezone.utc)
+            if cur > now:
+                base = cur
+        except Exception:
+            pass
+    new_until = base + timedelta(days=days)
+    patch = {"plan": plan, "subscription_until": new_until.isoformat()}
+    try:
+        res = _client().table("users").update(patch).eq("telegram_id", telegram_id).execute()
+        log_event(telegram_id, "subscription_paid", {"plan": plan, "days": days, "until": new_until.isoformat()})
+        return (res.data or [None])[0]
+    except Exception as e:
+        logger.error(f"activate_subscription({telegram_id}, {plan}): {e}")
+        return None

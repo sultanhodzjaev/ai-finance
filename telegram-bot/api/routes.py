@@ -216,3 +216,64 @@ async def get_plan(x_init_data: str = Header(...)):
             plans.PLAN_PRO:     {"stars": plans.PRICE_STARS[plans.PLAN_PRO],     "usd": plans.PRICE_USD[plans.PLAN_PRO]},
         },
     }
+
+
+@router.post("/upgrade/invoice")
+async def create_upgrade_invoice(
+    body: dict,
+    x_init_data: str = Header(...),
+):
+    """
+    Создаёт Telegram Stars invoice link для апгрейда подписки.
+    Body: { "tier": "premium" | "pro" }
+    Возвращает: { "invoice_link": "https://t.me/$..." }
+    """
+    import os
+    import httpx
+    from services import plans, storage
+
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+
+    tier = (body or {}).get("tier")
+    if tier not in (plans.PLAN_PREMIUM, plans.PLAN_PRO):
+        raise HTTPException(status_code=400, detail="Invalid tier")
+
+    stars = plans.PRICE_STARS.get(tier)
+    if not stars:
+        raise HTTPException(status_code=400, detail="No price for tier")
+
+    bot_token = os.environ.get("BOT_TOKEN")
+    if not bot_token:
+        raise HTTPException(status_code=500, detail="Bot misconfigured")
+
+    title = "AI-Финансист — Premium" if tier == plans.PLAN_PREMIUM else "AI-Финансист — Pro"
+    description = (
+        "Premium на 30 дней: 17 трат/день, 30 фото/мес, 300 вопросов AI."
+        if tier == plans.PLAN_PREMIUM
+        else "Pro на 30 дней: 100 трат/день, 150 фото/мес, 1500 вопросов AI, экспорт 10/мес."
+    )
+
+    payload = f"{tier}:{telegram_id}"
+    storage.log_event(telegram_id, "upgrade_clicked", {"tier": tier, "source": "miniapp"})
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{bot_token}/createInvoiceLink",
+            json={
+                "title": title,
+                "description": description,
+                "payload": payload,
+                "provider_token": "",
+                "currency": "XTR",
+                "prices": [{"label": title, "amount": stars}],
+            },
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Telegram API error: {resp.text[:200]}")
+    data = resp.json()
+    if not data.get("ok"):
+        raise HTTPException(status_code=502, detail=f"createInvoiceLink: {data.get('description', 'unknown')}")
+
+    return {"invoice_link": data["result"]}

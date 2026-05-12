@@ -15,7 +15,7 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from handlers import start, transactions, stats, ai_advisor, plan
+from handlers import start, transactions, stats, ai_advisor, plan, payments
 from api.server import app as fastapi_app
 from services.storage import init_db
 
@@ -38,7 +38,10 @@ async def run_bot():
     bot = Bot(token=bot_token)
     dp  = Dispatcher(storage=MemoryStorage())
 
-    # Порядок роутеров важен: ai_advisor идёт до transactions
+    # Порядок роутеров важен: ai_advisor идёт до transactions;
+    # payments — отдельным роутером, чтобы pre_checkout_query и successful_payment
+    # обрабатывались первыми.
+    dp.include_router(payments.router)
     dp.include_router(start.router)
     dp.include_router(plan.router)
     dp.include_router(ai_advisor.router)
