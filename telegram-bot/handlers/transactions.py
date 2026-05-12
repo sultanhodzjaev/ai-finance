@@ -49,11 +49,10 @@ def _check_action_limit(telegram_id: int, action: str) -> tuple[bool, str]:
             else storage.count_events_this_month(telegram_id, "ai_question")
         )
     elif action == "voice":
-        # Голосовые отдельной таблицы нет — логируем как events type='voice' если/когда подключим.
         used = (
-            storage.count_events_today(telegram_id, "voice")
+            storage.count_transactions_today(telegram_id, source="voice")
             if period == "day"
-            else storage.count_events_this_month(telegram_id, "voice")
+            else storage.count_transactions_this_month(telegram_id, source="voice")
         )
     else:
         used = 0
@@ -247,6 +246,76 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
 
     await message.answer(
         build_confirmation_text(transaction_data),
+        reply_markup=get_confirmation_keyboard(),
+    )
+
+
+@router.message(F.voice)
+async def handle_voice_transaction(message: Message, state: FSMContext):
+    """Транскрибирует голосовое через Gemini, парсит как обычную текстовую трату."""
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    user = message.from_user
+    storage.get_or_create_user(
+        telegram_id=user.id,
+        username=user.username or "",
+        first_name=user.first_name or "Друг",
+    )
+
+    allowed, deny = _check_action_limit(user.id, "voice")
+    if not allowed:
+        await message.answer(deny, parse_mode="HTML")
+        return
+
+    processing_msg = await message.answer("🎙 Распознаю голос...")
+
+    try:
+        voice_file = await message.bot.get_file(message.voice.file_id)
+        voice_io   = await message.bot.download_file(voice_file.file_path)
+        voice_bytes = voice_io.read()
+        mime = message.voice.mime_type or "audio/ogg"
+        transcript = await gemini.transcribe_voice(voice_bytes, mime_type=mime)
+        if not transcript:
+            raise RuntimeError("empty transcript")
+        result = await gemini.categorize_text_transaction(transcript)
+    except RateLimitError:
+        await processing_msg.delete()
+        await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
+        return
+    except Exception as e:
+        logger.error(f"Ошибка при обработке голосового: {e}")
+        await processing_msg.delete()
+        await message.answer("Не получилось разобрать голосовое. Попробуй ещё раз или напиши текстом.")
+        return
+
+    await processing_msg.delete()
+
+    if not result.get("success"):
+        await message.answer(
+            f"Услышал: «{transcript}», но не понял что записать.\n"
+            "Скажи яснее, например: «потратил 500 на обед»."
+        )
+        return
+
+    db_user  = storage.get_user(user.id)
+    currency = db_user.get("currency", "KGS") if db_user else "KGS"
+
+    transaction_data = {
+        "type":        result.get("type", "expense"),
+        "amount":      result["amount"],
+        "category":    result.get("category", "other"),
+        "description": result.get("description") or transcript[:80],
+        "merchant":    None,
+        "source":      "voice",
+        "currency":    currency,
+    }
+    await state.set_state(TransactionStates.waiting_confirmation)
+    await state.update_data(transaction=transaction_data)
+
+    await message.answer(
+        f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(transaction_data),
         reply_markup=get_confirmation_keyboard(),
     )
 

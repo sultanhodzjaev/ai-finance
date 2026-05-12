@@ -204,6 +204,27 @@ async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
         raise
 
 
+async def transcribe_voice(voice_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """
+    Транскрибирует голосовое сообщение Telegram через Gemini.
+    Возвращает чистый текст (без пояснений модели).
+    """
+    audio_b64 = base64.b64encode(voice_bytes).decode("ascii")
+    contents = [{
+        "parts": [
+            {"text": "Транскрибируй это голосовое сообщение на русский язык. "
+                     "Верни ТОЛЬКО текст транскрипции без пояснений и форматирования."},
+            {"inline_data": {"mime_type": mime_type, "data": audio_b64}},
+        ]
+    }]
+    try:
+        text = await _generate(contents)
+        return (text or "").strip().strip('"').strip()
+    except Exception as e:
+        logger.error(f"transcribe_voice error: {e}")
+        raise
+
+
 async def ask_financial_advisor(
     user_question: str,
     currency: str,

@@ -196,9 +196,9 @@ async def get_plan(x_init_data: str = Header(...)):
                     if period == "day"
                     else storage.count_events_this_month(telegram_id, "ai_question"))
         if action == "voice":
-            return (storage.count_events_today(telegram_id, "voice")
+            return (storage.count_transactions_today(telegram_id, source="voice")
                     if period == "day"
-                    else storage.count_events_this_month(telegram_id, "voice"))
+                    else storage.count_transactions_this_month(telegram_id, source="voice"))
         return 0
 
     runtime_actions = ["transaction", "photo", "ai_question", "voice"]

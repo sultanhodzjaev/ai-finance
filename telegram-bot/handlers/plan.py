@@ -55,9 +55,9 @@ def _used_for(action: str, telegram_id: int) -> int:
         )
     if action == "voice":
         return (
-            storage.count_events_today(telegram_id, "voice")
+            storage.count_transactions_today(telegram_id, source="voice")
             if period == "day"
-            else storage.count_events_this_month(telegram_id, "voice")
+            else storage.count_transactions_this_month(telegram_id, source="voice")
         )
     return 0
 
