@@ -297,3 +297,46 @@ def ensure_trial_defaults(user: dict) -> dict:
     if not user.get("trial_until"):
         user["trial_until"] = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     return user
+
+
+def _month_start_utc() -> str:
+    """Начало текущего календарного месяца по UTC в ISO."""
+    now = datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def count_transactions_this_month(telegram_id: int, source: str | None = None) -> int:
+    """Сколько транзакций у юзера с начала текущего календарного месяца (UTC)."""
+    try:
+        q = (
+            _client()
+            .table("transactions")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .gte("created_at", _month_start_utc())
+        )
+        if source is not None:
+            q = q.eq("source", source)
+        res = q.execute()
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_transactions_this_month({telegram_id}, {source}): {e}")
+        return 0
+
+
+def count_events_this_month(telegram_id: int, event_type: str) -> int:
+    """Сколько событий заданного типа у юзера с начала месяца (UTC)."""
+    try:
+        res = (
+            _client()
+            .table("events")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .eq("type", event_type)
+            .gte("created_at", _month_start_utc())
+            .execute()
+        )
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_events_this_month({telegram_id}, {event_type}): {e}")
+        return 0

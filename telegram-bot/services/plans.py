@@ -1,4 +1,10 @@
-"""Подписки, лимиты и проверка прав."""
+"""Подписки, лимиты и проверка прав.
+
+Финальная тарифная таблица — см. `wiki/topics/finance-bots/ai-finansist-unit-economics-and-tariffs-v1.md`.
+Все runtime-проверки опираются на эту таблицу. Параметры, для которых ещё нет соответствующей
+функциональности в продукте (голос, импорт CSV, экспорт, регулярные платежи, кол-во категорий),
+зафиксированы декларативно и будут подключаться по мере появления.
+"""
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone
@@ -8,30 +14,88 @@ logger = logging.getLogger(__name__)
 
 PLAN_TRIAL   = "trial"
 PLAN_FREE    = "free"
-PLAN_BASIC   = "basic"
 PLAN_PREMIUM = "premium"
+PLAN_PRO     = "pro"
 
-Action = Literal["transaction", "photo", "ai_question"]
+# Действия с runtime-проверкой лимита. Остальные параметры декларативны.
+Action = Literal["transaction", "photo", "ai_question", "voice"]
 
-# Лимиты в день. 0 = не разрешено вовсе.
-LIMITS: dict[str, dict[str, int]] = {
-    PLAN_TRIAL:   {"transaction": 100, "photo": 30, "ai_question": 30},
-    PLAN_FREE:    {"transaction": 5,   "photo": 0,  "ai_question": 3},
-    PLAN_BASIC:   {"transaction": 100, "photo": 5,  "ai_question": 0},
-    PLAN_PREMIUM: {"transaction": 200, "photo": 30, "ai_question": 30},
+# Финальная тарифная таблица (2026-05-12).
+LIMITS: dict[str, dict] = {
+    PLAN_TRIAL: {
+        "transactions_per_day":    14,
+        "ai_questions_per_month":  100,
+        "voice_per_month":         50,
+        "photo_per_month":         30,
+        "history_days":            None,         # вся за период триала
+        "categories_max":          15,
+        "recurring_payments_max":  5,
+        "csv_import":              False,
+        "exports_total":           1,            # 1 разовая выгрузка за весь триал
+        "mini_app_analytics":      "full",
+    },
+    PLAN_FREE: {
+        "transactions_per_day":    2,
+        "ai_questions_per_month":  10,
+        "voice_per_month":         0,
+        "photo_per_month":         0,
+        "history_days":            30,
+        "categories_max":          5,
+        "recurring_payments_max":  1,
+        "csv_import":              False,
+        "exports_per_month":       0,
+        "mini_app_analytics":      "basic",
+    },
+    PLAN_PREMIUM: {
+        "transactions_per_day":    17,
+        "ai_questions_per_month":  300,
+        "voice_per_month":         60,
+        "photo_per_month":         30,
+        "history_days":            365,
+        "categories_max":          30,
+        "recurring_payments_max":  10,
+        "csv_import":              True,
+        "exports_per_month":       3,
+        "mini_app_analytics":      "full",
+    },
+    PLAN_PRO: {
+        "transactions_per_day":    100,
+        "ai_questions_per_month":  1500,
+        "voice_per_month":         200,
+        "photo_per_month":         150,
+        "history_days":            730,
+        "categories_max":          100,
+        "recurring_payments_max":  50,
+        "csv_import":              True,
+        "exports_per_month":       10,
+        "mini_app_analytics":      "full",
+    },
 }
 
-# Цены в Telegram Stars
+# Цены в Telegram Stars (≈ $1 = 50⭐).
 PRICE_STARS = {
-    PLAN_BASIC:   100,   # $2
-    PLAN_PREMIUM: 250,   # $5
+    PLAN_PREMIUM: 350,   # $7
+    PLAN_PRO:     750,   # $15
+}
+
+PRICE_USD = {
+    PLAN_PREMIUM: 7,
+    PLAN_PRO:     15,
 }
 
 PLAN_TITLE = {
     PLAN_TRIAL:   "Trial",
     PLAN_FREE:    "Free",
-    PLAN_BASIC:   "Базовый",
-    PLAN_PREMIUM: "Премиум",
+    PLAN_PREMIUM: "Premium",
+    PLAN_PRO:     "Pro",
+}
+
+# Какой ключ в LIMITS соответствует каждому action и какой период мерим.
+ACTION_TO_LIMIT = {
+    "transaction": ("transactions_per_day",    "day"),
+    "photo":       ("photo_per_month",         "month"),
+    "ai_question": ("ai_questions_per_month",  "month"),
+    "voice":       ("voice_per_month",         "month"),
 }
 
 
@@ -41,7 +105,6 @@ def _parse_ts(value) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     try:
-        # Supabase возвращает ISO-строку (например "2026-05-19T10:11:12.345+00:00")
         s = str(value).replace("Z", "+00:00")
         dt = datetime.fromisoformat(s)
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -52,9 +115,9 @@ def _parse_ts(value) -> datetime | None:
 
 def effective_plan(user: dict) -> str:
     """
-    Возвращает фактический план с учётом срока действия.
+    Возвращает фактический план с учётом срока действия:
     - trial → free, если trial_until прошёл
-    - basic/premium → free, если subscription_until прошёл (null = бессрочно)
+    - premium/pro → free, если subscription_until прошёл (null = бессрочно)
     """
     now = datetime.now(timezone.utc)
     plan = (user or {}).get("plan") or PLAN_TRIAL
@@ -65,7 +128,7 @@ def effective_plan(user: dict) -> str:
             return PLAN_TRIAL
         return PLAN_FREE
 
-    if plan in (PLAN_BASIC, PLAN_PREMIUM):
+    if plan in (PLAN_PREMIUM, PLAN_PRO):
         sub_until = _parse_ts(user.get("subscription_until"))
         if sub_until is None:
             return plan  # бессрочно (для владельца)
@@ -77,36 +140,48 @@ def effective_plan(user: dict) -> str:
 
 
 def limit_for(plan: str, action: Action) -> int:
-    return LIMITS.get(plan, LIMITS[PLAN_FREE]).get(action, 0)
+    """Числовой лимит для пары (plan, action). 0 — действие запрещено в плане."""
+    key, _period = ACTION_TO_LIMIT.get(action, (None, None))
+    if key is None:
+        return 0
+    return LIMITS.get(plan, LIMITS[PLAN_FREE]).get(key, 0) or 0
+
+
+def period_for(action: Action) -> str:
+    """'day' | 'month' — за какой период считается лимит."""
+    _key, period = ACTION_TO_LIMIT.get(action, (None, "day"))
+    return period
 
 
 def _upgrade_hint(plan: str, action: Action) -> str:
-    if action == "ai_question":
-        return "AI-финансист доступен только в Премиум-плане — /upgrade"
     if plan == PLAN_FREE:
-        return "Купи подписку, чтобы снять лимиты — /upgrade"
-    return "Лимиты обновятся завтра, либо подними план — /upgrade"
+        return "Купи Premium или Pro, чтобы снять лимит — /upgrade"
+    if plan == PLAN_TRIAL:
+        return "До конца триала действуют ограниченные лимиты. После — можно купить Premium или Pro — /upgrade"
+    return "Лимит обновится со следующим периодом, либо подними план — /upgrade"
 
 
 def deny_message(plan: str, action: Action, used: int, limit: int) -> str:
     """Текст, который бот покажет юзеру при превышении лимита."""
     plan_title = PLAN_TITLE.get(plan, plan)
+    period = period_for(action)
+    period_word = "сегодня" if period == "day" else "в этом месяце"
+
     if limit == 0:
-        if action == "photo":
-            head = "📷 Фото чеков недоступны в твоём текущем плане."
-        elif action == "ai_question":
-            head = "🤖 AI-финансист недоступен в твоём текущем плане."
-        else:
-            head = "Это действие недоступно в твоём текущем плане."
+        head_map = {
+            "photo":       "📷 Фото чеков недоступны в твоём текущем плане.",
+            "ai_question": "🤖 AI-финансист недоступен в твоём текущем плане.",
+            "voice":       "🎙 Голосовые сообщения недоступны в твоём текущем плане.",
+            "transaction": "Это действие недоступно в твоём текущем плане.",
+        }
+        head = head_map.get(action, "Это действие недоступно.")
         return f"{head}\nТекущий план: <b>{plan_title}</b>.\n\n{_upgrade_hint(plan, action)}"
 
-    if action == "transaction":
-        head = f"Ты записал {used} трат сегодня — это лимит плана <b>{plan_title}</b>."
-    elif action == "photo":
-        head = f"Ты отправил {used} фото чеков сегодня — лимит плана <b>{plan_title}</b>."
-    elif action == "ai_question":
-        head = f"Ты задал {used} вопросов финансисту сегодня — лимит плана <b>{plan_title}</b>."
-    else:
-        head = "Лимит на сегодня исчерпан."
-
+    head_map = {
+        "transaction": f"Ты записал {used} трат {period_word} — это лимит плана <b>{plan_title}</b>.",
+        "photo":       f"Ты отправил {used} фото чеков {period_word} — лимит плана <b>{plan_title}</b>.",
+        "ai_question": f"Ты задал {used} вопросов финансисту {period_word} — лимит плана <b>{plan_title}</b>.",
+        "voice":       f"Ты записал {used} голосовых {period_word} — лимит плана <b>{plan_title}</b>.",
+    }
+    head = head_map.get(action, f"Лимит на {period_word} исчерпан.")
     return f"{head}\n\n{_upgrade_hint(plan, action)}"

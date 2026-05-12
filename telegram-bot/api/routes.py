@@ -163,3 +163,56 @@ async def list_categories(x_init_data: str = Header(...)):
         "expense_categories": CATEGORIES,
         "income_categories":  INCOME_CATEGORIES,
     }
+
+
+@router.get("/plan")
+async def get_plan(x_init_data: str = Header(...)):
+    """Возвращает текущий план юзера, лимиты и использование за период."""
+    from services import plans, storage
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+
+    plan = plans.effective_plan(user)
+    plan_limits = plans.LIMITS.get(plan, {})
+
+    def _used(action: str) -> int:
+        period = plans.period_for(action)
+        if action == "transaction":
+            return (storage.count_transactions_today(telegram_id, source="text")
+                    if period == "day"
+                    else storage.count_transactions_this_month(telegram_id, source="text"))
+        if action == "photo":
+            return (storage.count_transactions_today(telegram_id, source="photo")
+                    if period == "day"
+                    else storage.count_transactions_this_month(telegram_id, source="photo"))
+        if action == "ai_question":
+            return (storage.count_events_today(telegram_id, "ai_question")
+                    if period == "day"
+                    else storage.count_events_this_month(telegram_id, "ai_question"))
+        if action == "voice":
+            return (storage.count_events_today(telegram_id, "voice")
+                    if period == "day"
+                    else storage.count_events_this_month(telegram_id, "voice"))
+        return 0
+
+    runtime_actions = ["transaction", "photo", "ai_question", "voice"]
+    usage = {}
+    for a in runtime_actions:
+        usage[a] = {
+            "used":   _used(a),
+            "limit":  plans.limit_for(plan, a),
+            "period": plans.period_for(a),
+        }
+
+    return {
+        "plan":               plan,
+        "plan_title":         plans.PLAN_TITLE.get(plan, plan),
+        "trial_until":        user.get("trial_until"),
+        "subscription_until": user.get("subscription_until"),
+        "limits":             plan_limits,
+        "usage":              usage,
+        "pricing": {
+            plans.PLAN_PREMIUM: {"stars": plans.PRICE_STARS[plans.PLAN_PREMIUM], "usd": plans.PRICE_USD[plans.PLAN_PREMIUM]},
+            plans.PLAN_PRO:     {"stars": plans.PRICE_STARS[plans.PLAN_PRO],     "usd": plans.PRICE_USD[plans.PLAN_PRO]},
+        },
+    }

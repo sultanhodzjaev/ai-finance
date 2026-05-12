@@ -48,9 +48,14 @@ async def handle_advisor_question(message: Message, state: FSMContext):
 
     plan = plans.effective_plan(user)
     limit = plans.limit_for(plan, "ai_question")
-    used = storage.count_events_today(user_id, "ai_question")
+    period = plans.period_for("ai_question")
+    used = (
+        storage.count_events_today(user_id, "ai_question")
+        if period == "day"
+        else storage.count_events_this_month(user_id, "ai_question")
+    )
     if limit == 0 or used >= limit:
-        storage.log_event(user_id, "limit_hit", {"action": "ai_question", "plan": plan, "used": used, "limit": limit})
+        storage.log_event(user_id, "limit_hit", {"action": "ai_question", "plan": plan, "used": used, "limit": limit, "period": period})
         await message.answer(plans.deny_message(plan, "ai_question", used, limit), parse_mode="HTML")
         await state.clear()
         return

@@ -22,23 +22,44 @@ from utils.formatters import format_amount
 def _check_action_limit(telegram_id: int, action: str) -> tuple[bool, str]:
     """
     Возвращает (allowed, deny_message). allowed=False → бот должен ответить deny_message и выйти.
-    action ∈ {"transaction", "photo", "ai_question"}.
+    action ∈ {"transaction", "photo", "ai_question", "voice"}.
+    Период считается по `plans.period_for(action)` ('day' | 'month').
     """
     user = storage.get_user(telegram_id) or {}
     plan = plans.effective_plan(user)
     limit = plans.limit_for(plan, action)
+    period = plans.period_for(action)
 
     if action == "transaction":
-        used = storage.count_transactions_today(telegram_id, source="text")
+        used = (
+            storage.count_transactions_today(telegram_id, source="text")
+            if period == "day"
+            else storage.count_transactions_this_month(telegram_id, source="text")
+        )
     elif action == "photo":
-        used = storage.count_transactions_today(telegram_id, source="photo")
+        used = (
+            storage.count_transactions_today(telegram_id, source="photo")
+            if period == "day"
+            else storage.count_transactions_this_month(telegram_id, source="photo")
+        )
     elif action == "ai_question":
-        used = storage.count_events_today(telegram_id, "ai_question")
+        used = (
+            storage.count_events_today(telegram_id, "ai_question")
+            if period == "day"
+            else storage.count_events_this_month(telegram_id, "ai_question")
+        )
+    elif action == "voice":
+        # Голосовые отдельной таблицы нет — логируем как events type='voice' если/когда подключим.
+        used = (
+            storage.count_events_today(telegram_id, "voice")
+            if period == "day"
+            else storage.count_events_this_month(telegram_id, "voice")
+        )
     else:
         used = 0
 
     if limit == 0 or used >= limit:
-        storage.log_event(telegram_id, "limit_hit", {"action": action, "plan": plan, "used": used, "limit": limit})
+        storage.log_event(telegram_id, "limit_hit", {"action": action, "plan": plan, "used": used, "limit": limit, "period": period})
         return False, plans.deny_message(plan, action, used, limit)
 
     return True, ""
