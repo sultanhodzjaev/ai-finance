@@ -15,9 +15,10 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from handlers import start, transactions, stats, ai_advisor, plan, payments
+from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals
 from api.server import app as fastapi_app
 from services.storage import init_db
+from services.scheduler import scheduler_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +31,7 @@ FASTAPI_PORT = int(os.getenv("PORT", 5000))
 
 
 async def run_bot():
-    """Запускает Telegram-бот в режиме polling."""
+    """Запускает Telegram-бот в режиме polling + фоновый scheduler."""
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token:
         raise ValueError("BOT_TOKEN не найден. Добавь его в Secrets.")
@@ -43,10 +44,14 @@ async def run_bot():
     # обрабатывались первыми.
     dp.include_router(payments.router)
     dp.include_router(start.router)
+    dp.include_router(referrals.router)
     dp.include_router(plan.router)
     dp.include_router(ai_advisor.router)
     dp.include_router(stats.router)
     dp.include_router(transactions.router)
+
+    # Фоновый шедулер (trial sweep + ежедневные напоминания)
+    asyncio.create_task(scheduler_loop(bot))
 
     logger.info("Telegram-бот запускается в режиме polling...")
     await dp.start_polling(bot)

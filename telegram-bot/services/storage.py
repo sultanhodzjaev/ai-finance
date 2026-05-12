@@ -371,3 +371,150 @@ def activate_subscription(telegram_id: int, plan: str, days: int = 30) -> dict |
     except Exception as e:
         logger.error(f"activate_subscription({telegram_id}, {plan}): {e}")
         return None
+
+
+def get_user_by_referral_code(code: str) -> dict | None:
+    """Поиск пользователя по реферальному коду."""
+    try:
+        res = _client().table("users").select("*").eq("referral_code", code).maybe_single().execute()
+        return res.data if res else None
+    except Exception as e:
+        logger.error(f"get_user_by_referral_code({code}): {e}")
+        return None
+
+
+def set_referred_by(telegram_id: int, referrer_id: int) -> None:
+    """Записывает, кто пригласил юзера. Если уже записан — не трогает."""
+    try:
+        _client().table("users").update({"referred_by_user_id": referrer_id}) \
+            .eq("telegram_id", telegram_id).is_("referred_by_user_id", "null").execute()
+    except Exception as e:
+        logger.error(f"set_referred_by({telegram_id}, {referrer_id}): {e}")
+
+
+def extend_subscription_days(telegram_id: int, days: int, target_plan: str = "premium") -> dict | None:
+    """
+    Прибавляет подписке `days` дней (поверх существующей, если она в будущем).
+    Если у юзера plan='trial' или 'free' — поднимает до `target_plan`.
+    Если уже на премиум/pro — оставляет текущий plan, только продлевает.
+    """
+    from datetime import timedelta
+    user = get_user(telegram_id) or {}
+    now = datetime.now(timezone.utc)
+
+    current_str = user.get("subscription_until")
+    base = now
+    if current_str:
+        try:
+            cur = datetime.fromisoformat(str(current_str).replace("Z", "+00:00"))
+            if cur.tzinfo is None:
+                cur = cur.replace(tzinfo=timezone.utc)
+            if cur > now:
+                base = cur
+        except Exception:
+            pass
+
+    new_until = base + timedelta(days=days)
+    current_plan = user.get("plan", "trial")
+    plan = current_plan if current_plan in ("premium", "pro") else target_plan
+    patch = {"plan": plan, "subscription_until": new_until.isoformat()}
+
+    try:
+        res = _client().table("users").update(patch).eq("telegram_id", telegram_id).execute()
+        log_event(telegram_id, "subscription_extended", {"plan": plan, "days": days, "until": new_until.isoformat()})
+        return (res.data or [None])[0]
+    except Exception as e:
+        logger.error(f"extend_subscription_days({telegram_id}, {days}): {e}")
+        return None
+
+
+def expire_trial(telegram_id: int) -> None:
+    """Перевод юзера из trial в free."""
+    try:
+        _client().table("users").update({
+            "plan": "free",
+            "trial_expired_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("telegram_id", telegram_id).execute()
+        log_event(telegram_id, "trial_expired", {})
+    except Exception as e:
+        logger.error(f"expire_trial({telegram_id}): {e}")
+
+
+def mark_trial_warned(telegram_id: int) -> None:
+    try:
+        _client().table("users").update({
+            "trial_warned_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("telegram_id", telegram_id).execute()
+        log_event(telegram_id, "trial_warned", {})
+    except Exception as e:
+        logger.error(f"mark_trial_warned({telegram_id}): {e}")
+
+
+def find_trials_about_to_expire(within_hours: int = 24) -> list[dict]:
+    """Юзеры в триале, до конца < within_hours и ещё не уведомлённые."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    horizon = (now + timedelta(hours=within_hours)).isoformat()
+    try:
+        res = (
+            _client().table("users").select("telegram_id,trial_until")
+            .eq("plan", "trial")
+            .lte("trial_until", horizon)
+            .gte("trial_until", now.isoformat())
+            .is_("trial_warned_at", "null")
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.error(f"find_trials_about_to_expire: {e}")
+        return []
+
+
+def find_expired_trials() -> list[dict]:
+    """Юзеры в триале, у которых trial_until уже прошёл."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        res = (
+            _client().table("users").select("telegram_id,trial_until")
+            .eq("plan", "trial")
+            .lt("trial_until", now)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.error(f"find_expired_trials: {e}")
+        return []
+
+
+def find_users_without_transactions_today() -> list[dict]:
+    """
+    Возвращает активных юзеров, которые сегодня (UTC) ещё не записали ни одной транзакции.
+    «Активный» = есть хотя бы одна транзакция за последние 14 дней.
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    cutoff_14d = (now - timedelta(days=14)).isoformat()
+    try:
+        # 1) Юзеры с активностью за 14 дней
+        active = _client().table("transactions").select("telegram_id") \
+            .gte("created_at", cutoff_14d).execute().data or []
+        active_ids = list({r["telegram_id"] for r in active})
+        if not active_ids:
+            return []
+
+        # 2) Кто из них уже записал что-то сегодня
+        today_active = _client().table("transactions").select("telegram_id") \
+            .gte("created_at", today_start).in_("telegram_id", active_ids).execute().data or []
+        today_ids = {r["telegram_id"] for r in today_active}
+
+        # 3) Возвращаем тех, кто активный, но сегодня ничего не записал
+        to_remind = [tid for tid in active_ids if tid not in today_ids]
+        if not to_remind:
+            return []
+        res = _client().table("users").select("telegram_id,first_name") \
+            .in_("telegram_id", to_remind).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"find_users_without_transactions_today: {e}")
+        return []

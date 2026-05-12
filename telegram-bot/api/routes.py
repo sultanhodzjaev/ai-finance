@@ -204,6 +204,11 @@ async def get_plan(x_init_data: str = Header(...)):
             "period": plans.period_for(a),
         }
 
+    import os
+    bot_username = os.environ.get("BOT_USERNAME", "smartcash_ai_bot")
+    referral_code = user.get("referral_code") or ""
+    invite_link = f"https://t.me/{bot_username}?start=ref_{referral_code}" if referral_code else ""
+
     return {
         "plan":               plan,
         "plan_title":         plans.PLAN_TITLE.get(plan, plan),
@@ -214,6 +219,11 @@ async def get_plan(x_init_data: str = Header(...)):
         "pricing": {
             plans.PLAN_PREMIUM: {"stars": plans.PRICE_STARS[plans.PLAN_PREMIUM], "usd": plans.PRICE_USD[plans.PLAN_PREMIUM]},
             plans.PLAN_PRO:     {"stars": plans.PRICE_STARS[plans.PLAN_PRO],     "usd": plans.PRICE_USD[plans.PLAN_PRO]},
+        },
+        "referral": {
+            "code":         referral_code,
+            "invite_link":  invite_link,
+            "bonus_days":   14,
         },
     }
 

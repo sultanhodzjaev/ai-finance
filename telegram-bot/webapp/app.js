@@ -860,6 +860,25 @@ function buildPlan() {
              '🚀 Поднять до Pro'}
         </button>`;
 
+    const ref = p.referral || {};
+    const referralBlock = ref.invite_link ? `
+        <div class="bg-white rounded-2xl p-4 shadow-sm mt-4">
+            <h2 class="font-semibold text-gray-700 mb-2 text-sm">🎁 Пригласи друга — обоим +${ref.bonus_days || 14} дней Premium</h2>
+            <p class="text-xs text-gray-500 mb-3">
+                Когда друг откроет бота по твоей ссылке и сделает /start — вам обоим автоматически
+                начислится Premium-подписка на ${ref.bonus_days || 14} дней.
+            </p>
+            <button id="share-referral-btn"
+                    class="w-full bg-green-500 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition">
+                📤 Поделиться ссылкой
+            </button>
+            <button id="copy-referral-btn"
+                    class="w-full bg-gray-100 text-gray-700 py-2.5 rounded-xl font-medium mt-2 text-sm active:scale-95 transition">
+                Скопировать ссылку
+            </button>
+        </div>
+    ` : '';
+
     return `
         <div class="px-4 pt-5 pb-6">
             <div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl p-5 text-white shadow-md mb-4">
@@ -893,6 +912,7 @@ function buildPlan() {
             </div>
 
             ${upgradeBtn}
+            ${referralBlock}
         </div>`;
 }
 
@@ -901,6 +921,26 @@ function attachPlanHandlers() {
         state.screen = 'upgrade';
         render();
     });
+    const link = state.plan?.referral?.invite_link;
+    if (link) {
+        document.getElementById('share-referral-btn')?.addEventListener('click', () => {
+            const text = encodeURIComponent(
+                `Веду учёт трат через AI-Финансиста. Кидаешь ему «250 на обед» — он сам разбирает. ` +
+                `Открой по ссылке — нам обоим дадут 14 дней Premium бесплатно.`,
+            );
+            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${text}`;
+            if (tg?.openTelegramLink) tg.openTelegramLink(shareUrl);
+            else window.open(shareUrl, '_blank');
+        });
+        document.getElementById('copy-referral-btn')?.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(link);
+                if (tg?.showAlert) tg.showAlert('Ссылка скопирована');
+            } catch {
+                if (tg?.showAlert) tg.showAlert('Не удалось скопировать. Скопируй вручную из /invite в боте.');
+            }
+        });
+    }
 }
 
 function buildUpgrade() {
