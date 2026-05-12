@@ -359,8 +359,11 @@ async def handle_document_import(message: Message, state: FSMContext):
 @router.message(F.voice)
 async def handle_voice_transaction(message: Message, state: FSMContext):
     """Транскрибирует голосовое через Gemini, парсит как обычную текстовую трату."""
+    logger.info(f"voice handler: tg_user={message.from_user.id} duration={message.voice.duration if message.voice else '?'}s "
+                f"mime={message.voice.mime_type if message.voice else '?'}")
     current_state = await state.get_state()
     if current_state is not None:
+        logger.info(f"voice handler: skipped, user in FSM state {current_state}")
         return
 
     user = message.from_user
@@ -372,6 +375,7 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
 
     allowed, deny = _check_action_limit(user.id, "voice")
     if not allowed:
+        logger.info(f"voice handler: limit hit for {user.id}")
         await message.answer(deny, parse_mode="HTML")
         return
 
@@ -382,18 +386,21 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
         voice_io   = await message.bot.download_file(voice_file.file_path)
         voice_bytes = voice_io.read()
         mime = message.voice.mime_type or "audio/ogg"
+        logger.info(f"voice handler: downloaded {len(voice_bytes)} bytes, mime={mime}, calling Gemini")
         transcript = await gemini.transcribe_voice(voice_bytes, mime_type=mime)
+        logger.info(f"voice handler: transcript={transcript[:80]!r}")
         if not transcript:
             raise RuntimeError("empty transcript")
         result = await gemini.categorize_text_transaction(transcript)
+        logger.info(f"voice handler: categorized success={result.get('success')}")
     except RateLimitError:
         await processing_msg.delete()
         await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
         return
     except Exception as e:
-        logger.error(f"Ошибка при обработке голосового: {e}")
+        logger.exception(f"voice handler: error during processing: {e}")
         await processing_msg.delete()
-        await message.answer("Не получилось разобрать голосовое. Попробуй ещё раз или напиши текстом.")
+        await message.answer(f"Не получилось разобрать голосовое: {e}\nПопробуй ещё раз или напиши текстом.")
         return
 
     await processing_msg.delete()
