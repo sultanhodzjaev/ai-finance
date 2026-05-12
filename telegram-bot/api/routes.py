@@ -339,20 +339,27 @@ async def export_csv(x_init_data: str = Header(...)):
     history_days = limits.get("history_days")
     txs = storage.get_transactions(telegram_id, since_days=history_days)
 
+    from utils.categories import get_category_by_id
+    TYPE_RU = {"income": "Доход", "expense": "Расход"}
+    SOURCE_RU = {"text": "Текст", "photo": "Фото", "voice": "Голос", "miniapp": "Mini App"}
+
     buf = StringIO()
-    w = csvmod.writer(buf)
-    w.writerow(["date", "type", "amount", "currency", "category", "description", "merchant", "source"])
+    # delimiter=';' — Excel в ru-локали по умолчанию ожидает ; (иначе строка попадёт в одну ячейку)
+    w = csvmod.writer(buf, delimiter=';')
+    w.writerow(["Дата", "Тип", "Сумма", "Валюта", "Категория", "Описание", "Где", "Источник"])
     currency = user.get("currency", "KGS")
     for t in txs:
+        cat = get_category_by_id(t.get("category", "")) or {}
+        cat_name = cat.get("name") or t.get("category", "")
         w.writerow([
             t.get("datetime", "")[:19].replace("T", " "),
-            t.get("type", "expense"),
+            TYPE_RU.get(t.get("type", "expense"), t.get("type", "")),
             t.get("amount", 0),
             currency,
-            t.get("category", ""),
+            cat_name,
             t.get("description", ""),
             t.get("merchant") or "",
-            t.get("source", "text"),
+            SOURCE_RU.get(t.get("source", "text"), t.get("source", "")),
         ])
     csv_bytes = buf.getvalue().encode("utf-8-sig")  # BOM, чтобы Excel ел кириллицу
 
