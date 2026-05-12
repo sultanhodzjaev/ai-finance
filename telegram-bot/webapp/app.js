@@ -164,7 +164,7 @@ function render() {
         ${buildNav()}
         ${buildBottomSheet()}`);
     attachNavHandlers();
-    if (state.screen === 'dashboard') { renderCharts(); attachPlanWidgetHandlers(); }
+    if (state.screen === 'dashboard') renderCharts();
     if (state.screen === 'history')   attachHistoryHandlers();
     if (state.screen === 'add')       attachAddHandlers();
     if (state.screen === 'plan')      attachPlanHandlers();
@@ -242,8 +242,6 @@ function buildDashboard() {
                 </div>
                 <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-xl">💰</div>
             </div>
-
-            ${buildPlanWidget()}
 
             <!-- 3 карточки: доходы / расходы / остаток -->
             <div class="grid grid-cols-1 gap-3 mb-4">
