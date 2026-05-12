@@ -117,11 +117,18 @@ function destroyChart(key) {
 // ============================================================
 // ИНИЦИАЛИЗАЦИЯ
 // ============================================================
+// Lucide-иконки рендерятся через <i data-lucide="имя">. Helper-удобство.
+function icon(name, cls = 'w-5 h-5') {
+    return `<i data-lucide="${name}" class="${cls}"></i>`;
+}
+
 function showApp(html) {
     const loader = document.getElementById('static-loader');
     const app    = document.getElementById('app');
     if (loader) loader.style.display = 'none';
     if (app)    { app.style.display = 'block'; app.innerHTML = html; }
+    // Сканируем DOM и подменяем <i data-lucide=...> на SVG
+    if (window.lucide?.createIcons) window.lucide.createIcons();
 }
 
 async function init() {
@@ -185,19 +192,21 @@ function buildNav() {
              style="padding-bottom:max(env(safe-area-inset-bottom),4px)">
             <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
                            ${d ? 'text-indigo-600' : 'text-gray-400'}" data-screen="dashboard">
-                <span class="text-2xl">📊</span><span class="text-xs font-medium">Дашборд</span>
+                ${icon('layout-dashboard', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">Дашборд</span>
             </button>
             <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
                            ${h ? 'text-indigo-600' : 'text-gray-400'}" data-screen="history">
-                <span class="text-2xl">📜</span><span class="text-xs font-medium">История</span>
+                ${icon('clock', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">История</span>
             </button>
             <button class="nav-btn flex flex-col items-center py-1 px-3" data-screen="add">
-                <span class="bg-indigo-600 text-white text-3xl rounded-full w-12 h-12
-                             flex items-center justify-center shadow-md leading-none">+</span>
+                <span class="bg-indigo-600 text-white rounded-full w-12 h-12
+                             flex items-center justify-center shadow-md">
+                    ${icon('plus', 'w-6 h-6')}
+                </span>
             </button>
             <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
                            ${p ? 'text-indigo-600' : 'text-gray-400'}" data-screen="plan">
-                <span class="text-2xl">💎</span><span class="text-xs font-medium">План</span>
+                ${icon('crown', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">План</span>
             </button>
         </nav>`;
 }
@@ -237,10 +246,12 @@ function buildDashboard() {
         <div class="px-4 pt-5">
             <div class="flex items-start justify-between mb-4">
                 <div>
-                    <p class="text-gray-400 text-sm">Привет, ${state.me?.first_name||'Друг'}! 👋</p>
+                    <p class="text-gray-400 text-sm">Привет, ${state.me?.first_name||'Друг'}</p>
                     <h1 class="text-2xl font-bold text-gray-900">${monthNames[now.getMonth()]}</h1>
                 </div>
-                <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-xl">💰</div>
+                <div class="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
+                    ${icon('wallet', 'w-5 h-5')}
+                </div>
             </div>
 
             <!-- 3 карточки: доходы / расходы / остаток -->
@@ -273,7 +284,9 @@ function buildDashboard() {
             ` : `
                 <!-- Расходы по категориям -->
                 <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
-                    <h2 class="font-semibold text-gray-700 mb-3 text-sm">💸 Расходы по категориям</h2>
+                    <h2 class="font-semibold text-gray-700 mb-3 text-sm flex items-center gap-2">
+                        ${icon('trending-down', 'w-4 h-4 text-red-500')} Расходы по категориям
+                    </h2>
                     ${expenses.length === 0 ? `<p class="text-gray-400 text-sm text-center py-4">Расходов нет</p>` : `
                         <div class="relative" style="height:200px"><canvas id="donut-expense"></canvas></div>
                         <div class="mt-4 space-y-2 pt-3 border-t border-gray-100">
@@ -295,7 +308,9 @@ function buildDashboard() {
 
                 <!-- Доходы по категориям -->
                 <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
-                    <h2 class="font-semibold text-gray-700 mb-3 text-sm">💰 Доходы по категориям</h2>
+                    <h2 class="font-semibold text-gray-700 mb-3 text-sm flex items-center gap-2">
+                        ${icon('trending-up', 'w-4 h-4 text-green-500')} Доходы по категориям
+                    </h2>
                     ${incomes.length === 0 ? `
                         <p class="text-gray-400 text-sm text-center py-4">
                             Доходов нет. Запиши свой первый доход через бота.
@@ -305,7 +320,9 @@ function buildDashboard() {
 
                 <!-- Линейный график по дням (две линии) -->
                 <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
-                    <h2 class="font-semibold text-gray-700 mb-3 text-sm">📅 Динамика по дням</h2>
+                    <h2 class="font-semibold text-gray-700 mb-3 text-sm flex items-center gap-2">
+                        ${icon('calendar-range', 'w-4 h-4 text-indigo-500')} Динамика по дням
+                    </h2>
                     <div class="relative" style="height:160px"><canvas id="line-chart"></canvas></div>
                 </div>
             `}
@@ -744,10 +761,10 @@ function attachEditHandlers() {
 // ТАРИФЫ И ПЛАН
 // ============================================================
 const PLAN_VISUAL = {
-    trial:   { icon: '🎁', title: 'Trial',   subtitle: 'Полная пробная неделя' },
-    free:    { icon: '🆓', title: 'Free',    subtitle: 'Бесплатно навсегда' },
-    premium: { icon: '💎', title: 'Premium', subtitle: '$7 в месяц' },
-    pro:     { icon: '🚀', title: 'Pro',     subtitle: '$15 в месяц' },
+    trial:   { iconName: 'sparkles', title: 'Trial',   subtitle: 'Полная пробная неделя' },
+    free:    { iconName: 'circle',   title: 'Free',    subtitle: 'Бесплатно навсегда' },
+    premium: { iconName: 'gem',      title: 'Premium', subtitle: '$7 в месяц' },
+    pro:     { iconName: 'crown',    title: 'Pro',     subtitle: '$15 в месяц' },
 };
 
 function fmtPlanTimeLeft(planData) {
@@ -785,17 +802,19 @@ function buildPlanWidget() {
             </div>`;
     };
     return `
-        <div id="plan-widget" class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl
+        <div id="plan-widget" class="bg-gradient-to-br from-indigo-700 to-indigo-900 rounded-2xl
                                      p-4 text-white shadow-md mb-4 cursor-pointer">
             <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-2">
-                    <span class="text-2xl">${v.icon}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 bg-white/15 rounded-lg flex items-center justify-center">
+                        ${icon(v.iconName, 'w-5 h-5')}
+                    </div>
                     <div>
                         <p class="font-bold leading-tight">${v.title}</p>
                         <p class="text-white/70 text-xs">${fmtPlanTimeLeft(p)}</p>
                     </div>
                 </div>
-                <span class="text-white/80 text-xs">Подробнее →</span>
+                <span class="text-white/80 text-xs flex items-center gap-1">Подробнее ${icon('chevron-right', 'w-3 h-3')}</span>
             </div>
             ${lineHTML('Транзакции', tx)}
             ${lineHTML('Фото чека', ph)}
@@ -851,49 +870,63 @@ function buildPlan() {
             <span class="text-sm font-semibold text-gray-900">${value}</span>
         </div>`;
 
-    const upgradeBtn =
-        p.plan === 'pro' ? '' :
-        `<button id="open-upgrade-btn"
-                 class="w-full bg-indigo-600 text-white py-3 rounded-2xl font-semibold shadow-md mt-4 active:scale-95 transition">
-            ${p.plan === 'free' ? '✨ Попробовать Premium' :
-             p.plan === 'trial' ? '💎 Купить подписку' :
-             '🚀 Поднять до Pro'}
-        </button>`;
+    const upgradeBtn = p.plan === 'pro' ? '' : (() => {
+        const label = p.plan === 'free'  ? 'Попробовать Premium'
+                    : p.plan === 'trial' ? 'Купить подписку'
+                    : 'Поднять до Pro';
+        const ic    = p.plan === 'free'  ? 'sparkles'
+                    : p.plan === 'trial' ? 'gem'
+                    : 'crown';
+        return `
+            <button id="open-upgrade-btn"
+                    class="w-full bg-indigo-600 text-white py-3 rounded-2xl font-semibold shadow-md mt-4
+                           flex items-center justify-center gap-2 active:scale-95 transition">
+                ${icon(ic, 'w-5 h-5')} ${label}
+            </button>`;
+    })();
 
     const ref = p.referral || {};
     const referralBlock = ref.invite_link ? `
-        <div class="bg-white rounded-2xl p-4 shadow-sm mt-4">
-            <h2 class="font-semibold text-gray-700 mb-2 text-sm">🎁 Пригласи друга — обоим +${ref.bonus_days || 14} дней Premium</h2>
+        <div class="bg-white rounded-2xl p-4 shadow-sm mt-4 border border-emerald-100">
+            <h2 class="font-semibold text-gray-700 mb-2 text-sm flex items-center gap-2">
+                ${icon('gift', 'w-4 h-4 text-emerald-500')} Пригласи друга — обоим +${ref.bonus_days || 14} дней Premium
+            </h2>
             <p class="text-xs text-gray-500 mb-3">
                 Когда друг откроет бота по твоей ссылке и сделает /start — вам обоим автоматически
                 начислится Premium-подписка на ${ref.bonus_days || 14} дней.
             </p>
             <button id="share-referral-btn"
-                    class="w-full bg-green-500 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition">
-                📤 Поделиться ссылкой
+                    class="w-full bg-emerald-500 text-white py-2.5 rounded-xl font-semibold
+                           flex items-center justify-center gap-2 active:scale-95 transition">
+                ${icon('share-2', 'w-4 h-4')} Поделиться ссылкой
             </button>
             <button id="copy-referral-btn"
-                    class="w-full bg-gray-100 text-gray-700 py-2.5 rounded-xl font-medium mt-2 text-sm active:scale-95 transition">
-                Скопировать ссылку
+                    class="w-full bg-gray-100 text-gray-700 py-2.5 rounded-xl font-medium mt-2 text-sm
+                           flex items-center justify-center gap-2 active:scale-95 transition">
+                ${icon('copy', 'w-4 h-4')} Скопировать ссылку
             </button>
         </div>
     ` : '';
 
     return `
         <div class="px-4 pt-5 pb-6">
-            <div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl p-5 text-white shadow-md mb-4">
+            <div class="bg-gradient-to-br from-indigo-700 to-indigo-900 rounded-2xl p-5 text-white shadow-md mb-4">
                 <div class="flex items-center gap-3 mb-1">
-                    <span class="text-3xl">${v.icon}</span>
+                    <div class="w-12 h-12 bg-white/15 rounded-xl flex items-center justify-center">
+                        ${icon(v.iconName, 'w-7 h-7')}
+                    </div>
                     <div>
                         <p class="text-xl font-bold">${v.title}</p>
                         <p class="text-white/80 text-sm">${v.subtitle}</p>
                     </div>
                 </div>
-                <p class="text-white/70 text-xs mt-2">${fmtPlanTimeLeft(p)}</p>
+                <p class="text-white/70 text-xs mt-3">${fmtPlanTimeLeft(p)}</p>
             </div>
 
             <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
-                <h2 class="font-semibold text-gray-700 mb-1 text-sm">Использование сейчас</h2>
+                <h2 class="font-semibold text-gray-700 mb-1 text-sm flex items-center gap-2">
+                    ${icon('activity', 'w-4 h-4 text-indigo-500')} Использование сейчас
+                </h2>
                 ${row('Транзакции', 'transaction')}
                 ${row('Фото чеков', 'photo')}
                 ${row('AI-финансист', 'ai_question')}
@@ -901,7 +934,9 @@ function buildPlan() {
             </div>
 
             <div class="bg-white rounded-2xl p-4 shadow-sm">
-                <h2 class="font-semibold text-gray-700 mb-1 text-sm">Возможности плана</h2>
+                <h2 class="font-semibold text-gray-700 mb-1 text-sm flex items-center gap-2">
+                    ${icon('settings-2', 'w-4 h-4 text-indigo-500')} Возможности плана
+                </h2>
                 ${staticRow('История', limits.history_days ? `${limits.history_days} дн.` : 'вся')}
                 ${staticRow('Категорий', limits.categories_max || '—')}
                 ${staticRow('Регулярных платежей', limits.recurring_payments_max || '—')}
@@ -949,12 +984,14 @@ function buildUpgrade() {
     const premium = pricing.premium || { stars: 350, usd: 7 };
     const pro     = pricing.pro     || { stars: 750, usd: 15 };
 
-    const tierCard = (key, icon, title, price, features, recommended) => `
+    const tierCard = (key, iconName, title, price, features, recommended) => `
         <div class="bg-white rounded-2xl p-5 shadow-sm ${recommended ? 'ring-2 ring-indigo-500' : ''} mb-3 relative">
-            ${recommended ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full">Популярный</span>' : ''}
+            ${recommended ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full font-medium">Популярный</span>' : ''}
             <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-2">
-                    <span class="text-2xl">${icon}</span>
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 ${recommended ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-700'} rounded-xl flex items-center justify-center">
+                        ${icon(iconName, 'w-5 h-5')}
+                    </div>
                     <div>
                         <p class="font-bold text-gray-900">${title}</p>
                         <p class="text-xs text-gray-400">${price.stars}⭐ ≈ $${price.usd}/мес</p>
@@ -962,7 +999,7 @@ function buildUpgrade() {
                 </div>
             </div>
             <ul class="text-sm text-gray-700 space-y-1.5 mb-4">
-                ${features.map(f => `<li class="flex items-start gap-2"><span class="text-green-500">✓</span><span>${f}</span></li>`).join('')}
+                ${features.map(f => `<li class="flex items-start gap-2">${icon('check', 'w-4 h-4 text-green-500 mt-0.5 flex-shrink-0')}<span>${f}</span></li>`).join('')}
             </ul>
             <button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
                     data-tier="${key}" data-stars="${price.stars}">
@@ -974,10 +1011,12 @@ function buildUpgrade() {
         <div class="px-4 pt-5 pb-6">
             <div class="flex items-center justify-between mb-4">
                 <h1 class="text-2xl font-bold text-gray-900">Поднять план</h1>
-                <button id="back-to-plan" class="text-indigo-600 text-sm">← План</button>
+                <button id="back-to-plan" class="text-indigo-600 text-sm flex items-center gap-1">
+                    ${icon('chevron-left', 'w-4 h-4')} План
+                </button>
             </div>
 
-            ${tierCard('premium', '💎', 'Premium', premium, [
+            ${tierCard('premium', 'gem', 'Premium', premium, [
                 '17 трат / день (≈500/мес)',
                 '300 вопросов AI-финансисту в месяц',
                 '30 фото чеков в месяц',
@@ -986,7 +1025,7 @@ function buildUpgrade() {
                 'Импорт CSV и экспорт (3/мес)',
             ], true)}
 
-            ${tierCard('pro', '🚀', 'Pro', pro, [
+            ${tierCard('pro', 'crown', 'Pro', pro, [
                 '100 трат / день (≈3000/мес)',
                 '1500 вопросов AI-финансисту в месяц',
                 '150 фото чеков в месяц',
