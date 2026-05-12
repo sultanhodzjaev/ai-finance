@@ -250,6 +250,112 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
     )
 
 
+MAX_CSV_ROWS = 5000
+
+
+@router.message(F.document)
+async def handle_document_import(message: Message, state: FSMContext):
+    """Импорт транзакций из CSV-файла. Доступно на планах с csv_import=True."""
+    import csv as csvmod
+    from io import StringIO
+
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    doc = message.document
+    name = (doc.file_name or "").lower()
+    if not name.endswith(".csv"):
+        await message.answer("Я принимаю только CSV-файлы. Если у тебя Excel — экспортируй как CSV.")
+        return
+
+    user = message.from_user
+    storage.get_or_create_user(
+        telegram_id=user.id,
+        username=user.username or "",
+        first_name=user.first_name or "Друг",
+    )
+
+    db_user = storage.get_user(user.id) or {}
+    plan = plans.effective_plan(db_user)
+    if not plans.LIMITS.get(plan, {}).get("csv_import"):
+        await message.answer(
+            f"Импорт CSV доступен на Premium и Pro. Сейчас у тебя <b>{plans.PLAN_TITLE.get(plan, plan)}</b>.\n"
+            "Подними план — /upgrade",
+            parse_mode="HTML",
+        )
+        storage.log_event(user.id, "limit_hit", {"action": "csv_import", "plan": plan})
+        return
+
+    if doc.file_size and doc.file_size > 2 * 1024 * 1024:
+        await message.answer("Файл больше 2 МБ. Раздели на части и пришли поменьше.")
+        return
+
+    processing_msg = await message.answer("📥 Читаю файл...")
+
+    try:
+        f = await message.bot.get_file(doc.file_id)
+        buf = await message.bot.download_file(f.file_path)
+        text = buf.read().decode("utf-8-sig", errors="replace")
+    except Exception as e:
+        logger.error(f"download csv: {e}")
+        await processing_msg.delete()
+        await message.answer("Не удалось скачать файл. Попробуй ещё раз.")
+        return
+
+    try:
+        rdr = csvmod.DictReader(StringIO(text))
+        rows = list(rdr)
+    except Exception as e:
+        logger.error(f"parse csv: {e}")
+        await processing_msg.delete()
+        await message.answer("Не получилось распарсить CSV. Проверь формат — должны быть колонки date, amount, category, description.")
+        return
+
+    if not rows:
+        await processing_msg.delete()
+        await message.answer("Файл пустой или нет заголовка.")
+        return
+
+    if len(rows) > MAX_CSV_ROWS:
+        await processing_msg.delete()
+        await message.answer(f"Слишком много строк ({len(rows)}). Максимум за раз — {MAX_CSV_ROWS}.")
+        return
+
+    imported = 0
+    skipped = 0
+    for r in rows:
+        try:
+            amount = float(str(r.get("amount", "")).replace(",", "."))
+            if amount <= 0:
+                skipped += 1; continue
+            tx = {
+                "type":        (r.get("type") or "expense").strip().lower(),
+                "amount":      amount,
+                "category":    (r.get("category") or "other").strip().lower() or "other",
+                "description": (r.get("description") or "").strip()[:200],
+                "merchant":    (r.get("merchant") or None) or None,
+                "source":      "csv_import",
+                "datetime":    (r.get("date") or "").strip() or datetime.now().isoformat(),
+            }
+            if tx["type"] not in ("income", "expense"):
+                tx["type"] = "expense"
+            storage.add_transaction(user.id, tx)
+            imported += 1
+        except Exception:
+            skipped += 1
+            continue
+
+    await processing_msg.delete()
+    storage.log_event(user.id, "csv_import", {"imported": imported, "skipped": skipped})
+    await message.answer(
+        f"✅ Импорт завершён.\n"
+        f"Загружено: <b>{imported}</b> транзакций\n"
+        f"Пропущено: <b>{skipped}</b>",
+        parse_mode="HTML",
+    )
+
+
 @router.message(F.voice)
 async def handle_voice_transaction(message: Message, state: FSMContext):
     """Транскрибирует голосовое через Gemini, парсит как обычную текстовую трату."""
