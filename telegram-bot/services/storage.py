@@ -109,17 +109,25 @@ def add_transaction(telegram_id: int, transaction: dict) -> None:
         logger.error(f"add_transaction({telegram_id}): {e}")
 
 
-def get_transactions(telegram_id: int) -> list:
-    """Возвращает все транзакции пользователя, отсортированные от новых к старым."""
+def get_transactions(telegram_id: int, since_days: int | None = None) -> list:
+    """
+    Возвращает транзакции пользователя, отсортированные от новых к старым.
+    Если задан since_days — отдаёт только записи за последние N дней
+    (по тарифным ограничениям истории).
+    """
     try:
-        res = (
+        from datetime import timedelta
+        q = (
             _client()
             .table("transactions")
             .select("*")
             .eq("telegram_id", telegram_id)
             .order("created_at", desc=True)
-            .execute()
         )
+        if since_days is not None and since_days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+            q = q.gte("created_at", cutoff)
+        res = q.execute()
         # Нормализуем поле datetime для обратной совместимости с ботом
         txs = []
         for row in (res.data or []):

@@ -5,7 +5,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
-from services import storage
+from services import plans, storage
 from utils.categories import get_category, get_category_by_id
 from utils.formatters import format_amount, format_date
 
@@ -35,7 +35,8 @@ async def cmd_today(event: Message | CallbackQuery):
         send = event.answer
 
     user = storage.get_or_create_user(user_id, "", "")
-    transactions = storage.get_transactions(user_id)
+    history_days = plans.LIMITS.get(plans.effective_plan(user), {}).get("history_days")
+    transactions = storage.get_transactions(user_id, since_days=history_days)
     currency = user.get("currency", "KGS")
 
     today = date.today()
@@ -97,7 +98,8 @@ async def cmd_stats(event: Message | CallbackQuery):
         send = event.answer
 
     user = storage.get_or_create_user(user_id, "", "")
-    transactions = storage.get_transactions(user_id)
+    history_days = plans.LIMITS.get(plans.effective_plan(user), {}).get("history_days")
+    transactions = storage.get_transactions(user_id, since_days=history_days)
     currency = user.get("currency", "KGS")
 
     now = datetime.now()

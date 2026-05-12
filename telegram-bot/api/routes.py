@@ -55,10 +55,13 @@ async def list_transactions(
     x_init_data: str = Header(...),
     type: Optional[str] = Query(None, description="Фильтр: income, expense или не указан"),
 ):
-    """Все транзакции пользователя с опциональным фильтром по типу."""
+    """Все транзакции пользователя в пределах истории, разрешённой его тарифом."""
+    from services import plans
     telegram_id = require_auth(x_init_data)
-    ensure_user(x_init_data, telegram_id)
-    txs = get_transactions(telegram_id)
+    user = ensure_user(x_init_data, telegram_id)
+    plan = plans.effective_plan(user)
+    history_days = plans.LIMITS.get(plan, {}).get("history_days")  # None = безлимит
+    txs = get_transactions(telegram_id, since_days=history_days)
 
     if type in ("income", "expense"):
         txs = [tx for tx in txs if tx.get("type", "expense") == type]
@@ -111,9 +114,12 @@ async def remove_transaction(tx_id: str, x_init_data: str = Header(...)):
 
 @router.get("/stats")
 async def get_stats(x_init_data: str = Header(...)):
-    """Статистика доходов и расходов за текущий месяц."""
+    """Статистика доходов и расходов за текущий месяц (в пределах разрешённой истории)."""
+    from services import plans
     telegram_id = require_auth(x_init_data)
-    txs = get_transactions(telegram_id)
+    user = ensure_user(x_init_data, telegram_id)
+    history_days = plans.LIMITS.get(plans.effective_plan(user), {}).get("history_days")
+    txs = get_transactions(telegram_id, since_days=history_days)
     now = datetime.now()
 
     month_txs = [
@@ -287,3 +293,60 @@ async def create_upgrade_invoice(
         raise HTTPException(status_code=502, detail=f"createInvoiceLink: {data.get('description', 'unknown')}")
 
     return {"invoice_link": data["result"]}
+
+
+@router.get("/export.csv")
+async def export_csv(x_init_data: str = Header(...)):
+    """
+    Возвращает все доступные транзакции пользователя в CSV.
+    Учитывает лимиты тарифа: history_days, exports_per_month / exports_total.
+    """
+    from datetime import datetime, timezone
+    from fastapi.responses import StreamingResponse
+    from io import StringIO
+    import csv as csvmod
+
+    from services import plans, storage
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+    plan = plans.effective_plan(user)
+    limits = plans.LIMITS.get(plan, {})
+
+    # Проверяем лимит на количество экспортов
+    if plan == plans.PLAN_TRIAL:
+        cap = limits.get("exports_total")
+        used = storage.count_events_this_month(telegram_id, "export_csv")
+    else:
+        cap = limits.get("exports_per_month")
+        used = storage.count_events_this_month(telegram_id, "export_csv")
+    if cap is None or cap == 0:
+        raise HTTPException(status_code=403, detail="Экспорт недоступен на твоём плане. Купи Premium — /upgrade")
+    if used >= cap:
+        raise HTTPException(status_code=429, detail=f"Лимит экспортов исчерпан ({used}/{cap}). Обновится в следующем периоде.")
+
+    history_days = limits.get("history_days")
+    txs = storage.get_transactions(telegram_id, since_days=history_days)
+
+    buf = StringIO()
+    w = csvmod.writer(buf)
+    w.writerow(["date", "type", "amount", "currency", "category", "description", "merchant", "source"])
+    currency = user.get("currency", "KGS")
+    for t in txs:
+        w.writerow([
+            t.get("datetime", "")[:19].replace("T", " "),
+            t.get("type", "expense"),
+            t.get("amount", 0),
+            currency,
+            t.get("category", ""),
+            t.get("description", ""),
+            t.get("merchant") or "",
+            t.get("source", "text"),
+        ])
+
+    storage.log_event(telegram_id, "export_csv", {"plan": plan, "rows": len(txs)})
+    fname = f"ai-finansist-{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

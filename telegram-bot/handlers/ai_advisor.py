@@ -60,7 +60,8 @@ async def handle_advisor_question(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    transactions = storage.get_transactions(user_id)
+    history_days = plans.LIMITS.get(plan, {}).get("history_days")
+    transactions = storage.get_transactions(user_id, since_days=history_days)
     currency = user.get("currency", "KGS")
 
     thinking_msg = await message.answer("🤔 Анализирую твои финансы...")

@@ -171,7 +171,13 @@ function render() {
         ${buildNav()}
         ${buildBottomSheet()}`);
     attachNavHandlers();
-    if (state.screen === 'dashboard') renderCharts();
+    if (state.screen === 'dashboard') {
+        renderCharts();
+        document.getElementById('open-upgrade-from-dash')?.addEventListener('click', () => {
+            state.screen = 'plan';
+            render();
+        });
+    }
     if (state.screen === 'history')   attachHistoryHandlers();
     if (state.screen === 'add')       attachAddHandlers();
     if (state.screen === 'plan')      attachPlanHandlers();
@@ -275,6 +281,16 @@ function buildDashboard() {
                 </div>
             </div>
 
+            ${state.plan?.limits?.mini_app_analytics === 'basic' ? `
+                <div class="bg-white rounded-2xl p-4 shadow-sm mb-4 border border-gray-100">
+                    <p class="text-sm text-gray-500">
+                        ${icon('lock', 'inline w-4 h-4 mr-1 text-gray-400')}
+                        Полная аналитика — графики по категориям и дням, экспорт CSV —
+                        доступны на Premium. <span class="text-indigo-600 cursor-pointer" id="open-upgrade-from-dash">Открыть план →</span>
+                    </p>
+                </div>
+            ` : ''}
+
             ${monthTxs.length === 0 ? `
                 <div class="bg-white rounded-2xl p-8 text-center shadow-sm">
                     <div class="text-4xl mb-3">🎉</div>
@@ -282,6 +298,7 @@ function buildDashboard() {
                     <p class="text-sm text-gray-400 mt-1">Запиши первую операцию через бота или «+»</p>
                 </div>
             ` : `
+                ${state.plan?.limits?.mini_app_analytics === 'basic' ? '' : `
                 <!-- Расходы по категориям -->
                 <div class="bg-white rounded-2xl p-4 shadow-sm mb-4">
                     <h2 class="font-semibold text-gray-700 mb-3 text-sm flex items-center gap-2">
@@ -325,6 +342,7 @@ function buildDashboard() {
                     </h2>
                     <div class="relative" style="height:160px"><canvas id="line-chart"></canvas></div>
                 </div>
+                `}
             `}
         </div>`;
 }
@@ -885,6 +903,16 @@ function buildPlan() {
             </button>`;
     })();
 
+    // Кнопка экспорта в CSV (показываем если экспорт вообще доступен на плане)
+    const exportLimit = (p.limits || {}).exports_per_month ?? (p.limits || {}).exports_total ?? 0;
+    const exportBtn = exportLimit > 0 ? `
+        <button id="export-csv-btn"
+                class="w-full bg-white border border-gray-200 text-gray-700 py-2.5 rounded-2xl font-medium mt-3
+                       flex items-center justify-center gap-2 active:scale-95 transition">
+            ${icon('download', 'w-4 h-4')} Скачать CSV
+        </button>
+    ` : '';
+
     const ref = p.referral || {};
     const referralBlock = ref.invite_link ? `
         <div class="bg-white rounded-2xl p-4 shadow-sm mt-4 border border-emerald-100">
@@ -947,6 +975,7 @@ function buildPlan() {
             </div>
 
             ${upgradeBtn}
+            ${exportBtn}
             ${referralBlock}
         </div>`;
 }
@@ -956,6 +985,40 @@ function attachPlanHandlers() {
         state.screen = 'upgrade';
         render();
     });
+
+    document.getElementById('export-csv-btn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('export-csv-btn');
+        const originalHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = 'Готовлю файл...';
+        try {
+            const resp = await fetch('/miniapp/api/export.csv', {
+                headers: { 'X-Init-Data': tg?.initData || '' },
+            });
+            if (!resp.ok) {
+                const j = await resp.json().catch(() => ({}));
+                throw new Error(j.detail || `HTTP ${resp.status}`);
+            }
+            const blob = await resp.blob();
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url;
+            a.download = `ai-finansist-${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            if (tg?.showAlert) tg.showAlert('Файл загружен');
+        } catch (e) {
+            if (tg?.showAlert) tg.showAlert(`Не удалось скачать: ${e.message}`);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+            // Обновим план чтобы счётчик использованных экспортов сдвинулся
+            try { state.plan = await api('GET', '/plan'); } catch {}
+        }
+    });
+
     const link = state.plan?.referral?.invite_link;
     if (link) {
         document.getElementById('share-referral-btn')?.addEventListener('click', () => {
