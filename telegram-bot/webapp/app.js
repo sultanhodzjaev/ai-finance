@@ -45,6 +45,10 @@ const state = {
     editingTx:        false,
     addType:          'expense', // тип в форме добавления
     charts:           {},
+    // --- дашборд ---
+    dashboardPeriod:  'month',   // 'day'|'week'|'month'|'year'|'custom'
+    dashboardRange:   null,      // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } для custom
+    rangePickerOpen:  false,
 };
 
 // ============================================================
@@ -89,16 +93,62 @@ function getCat(id) {
     );
 }
 
-// Фильтрует по периоду
-function filterByPeriod(txs, f) {
+// Фильтрует по периоду (используется и в истории, и в дашборде)
+function filterByPeriod(txs, f, range = null) {
+    if (f === 'custom' && range?.from && range?.to) {
+        const from = new Date(range.from + 'T00:00:00');
+        const to   = new Date(range.to   + 'T23:59:59');
+        return txs.filter(tx => {
+            const d = new Date(tx.datetime);
+            return d >= from && d <= to;
+        });
+    }
     const now = new Date();
     return txs.filter(tx => {
         const d = new Date(tx.datetime);
         if (f === 'day')   return d.toDateString() === now.toDateString();
         if (f === 'week')  return d >= new Date(now - 7*24*60*60*1000);
         if (f === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        if (f === 'year')  return d.getFullYear() === now.getFullYear();
         return true;
     });
+}
+
+// Транзакции для дашборда — по выбранному там периоду
+function filterDashboard(txs) {
+    return filterByPeriod(txs, state.dashboardPeriod, state.dashboardRange);
+}
+
+const MONTH_NAMES = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const MONTH_SHORT = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+function dashboardTitle() {
+    const now = new Date();
+    const p   = state.dashboardPeriod;
+    if (p === 'day')   return 'Сегодня';
+    if (p === 'week')  return 'Неделя';
+    if (p === 'month') return MONTH_NAMES[now.getMonth()];
+    if (p === 'year')  return String(now.getFullYear());
+    if (p === 'custom' && state.dashboardRange) {
+        const f = new Date(state.dashboardRange.from + 'T00:00:00');
+        const t = new Date(state.dashboardRange.to   + 'T00:00:00');
+        return `${f.getDate()} ${MONTH_SHORT[f.getMonth()]} — ${t.getDate()} ${MONTH_SHORT[t.getMonth()]}`;
+    }
+    return 'Период';
+}
+
+function dashboardBalanceLabel() {
+    const p = state.dashboardPeriod;
+    if (p === 'day')    return 'Остаток за день';
+    if (p === 'week')   return 'Остаток за неделю';
+    if (p === 'month')  return 'Остаток за месяц';
+    if (p === 'year')   return 'Остаток за год';
+    return 'Остаток за период';
+}
+
+function toIsoDate(d) {
+    const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${day}`;
 }
 
 // Backward-compat: транзакции без type — расходы
@@ -169,7 +219,8 @@ function render() {
             ${state.screen === 'upgrade'   ? buildUpgrade()   : ''}
         </div>
         ${buildNav()}
-        ${buildBottomSheet()}`);
+        ${buildBottomSheet()}
+        ${state.rangePickerOpen ? buildRangePicker() : ''}`);
     attachNavHandlers();
     if (state.screen === 'dashboard') {
         renderCharts();
@@ -177,6 +228,8 @@ function render() {
             state.screen = 'plan';
             render();
         });
+        attachDashboardPeriodHandlers();
+        if (state.rangePickerOpen) attachRangePickerHandlers();
     }
     if (state.screen === 'history')   attachHistoryHandlers();
     if (state.screen === 'add')       attachAddHandlers();
@@ -232,32 +285,46 @@ function attachNavHandlers() {
 // ЭКРАН 1: ДАШБОРД
 // ============================================================
 function buildDashboard() {
-    const now      = new Date();
-    const monthTxs = filterByPeriod(state.transactions, 'month');
-    const incomes  = monthTxs.filter(t => txType(t) === 'income');
-    const expenses = monthTxs.filter(t => txType(t) === 'expense');
+    const periodTxs = filterDashboard(state.transactions);
+    const incomes  = periodTxs.filter(t => txType(t) === 'income');
+    const expenses = periodTxs.filter(t => txType(t) === 'expense');
     const totalIncome  = incomes.reduce((s,t) => s+t.amount, 0);
     const totalExpense = expenses.reduce((s,t) => s+t.amount, 0);
     const balance      = totalIncome - totalExpense;
     const balancePct   = balance >= 0;
-
-    const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 
     // Топ-3 расходов
     const byCat = {};
     expenses.forEach(t => { byCat[t.category] = (byCat[t.category]||0) + t.amount; });
     const top3 = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,3);
 
+    const periodOpts = [
+        {key:'day',    label:'День'},
+        {key:'week',   label:'Неделя'},
+        {key:'month',  label:'Месяц'},
+        {key:'year',   label:'Год'},
+        {key:'custom', label:'Период'},
+    ];
+
     return `
         <div class="px-4 pt-5">
             <div class="flex items-start justify-between mb-4">
                 <div>
                     <p class="text-gray-400 text-sm">Привет, ${state.me?.first_name||'Друг'}</p>
-                    <h1 class="text-2xl font-bold text-gray-900">${monthNames[now.getMonth()]}</h1>
+                    <h1 class="text-2xl font-bold text-gray-900">${dashboardTitle()}</h1>
                 </div>
                 <div class="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
                     ${icon('wallet', 'w-5 h-5')}
                 </div>
+            </div>
+
+            <!-- Переключатель периода -->
+            <div class="flex gap-2 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+                ${periodOpts.map(f=>`
+                    <button class="dash-period-btn flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border
+                        ${state.dashboardPeriod===f.key ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}"
+                        data-period="${f.key}">${f.label}</button>
+                `).join('')}
             </div>
 
             <!-- 3 карточки: доходы / расходы / остаток -->
@@ -275,7 +342,7 @@ function buildDashboard() {
                     </div>
                 </div>
                 <div class="${balancePct ? 'bg-indigo-600' : 'bg-red-600'} rounded-2xl p-4 text-white shadow">
-                    <p class="text-white/70 text-xs mb-1">Остаток за месяц</p>
+                    <p class="text-white/70 text-xs mb-1">${dashboardBalanceLabel()}</p>
                     <p class="text-2xl font-bold">${balancePct ? '+' : '−'}${fmt(balance)}</p>
                     <p class="text-white/60 text-xs mt-1">${balancePct ? 'Отличный результат 🎉' : 'Расходы превышают доходы ⚠️'}</p>
                 </div>
@@ -291,11 +358,11 @@ function buildDashboard() {
                 </div>
             ` : ''}
 
-            ${monthTxs.length === 0 ? `
+            ${periodTxs.length === 0 ? `
                 <div class="bg-white rounded-2xl p-8 text-center shadow-sm">
                     <div class="text-4xl mb-3">🎉</div>
-                    <p class="font-semibold text-gray-700">Трат пока нет</p>
-                    <p class="text-sm text-gray-400 mt-1">Запиши первую операцию через бота или «+»</p>
+                    <p class="font-semibold text-gray-700">За этот период операций нет</p>
+                    <p class="text-sm text-gray-400 mt-1">Запиши операцию через бота или «+», либо смени период выше</p>
                 </div>
             ` : `
                 ${state.plan?.limits?.mini_app_analytics === 'basic' ? '' : `
@@ -348,10 +415,9 @@ function buildDashboard() {
 }
 
 function renderCharts() {
-    const now      = new Date();
-    const monthTxs = filterByPeriod(state.transactions, 'month');
-    const incomes  = monthTxs.filter(t => txType(t) === 'income');
-    const expenses = monthTxs.filter(t => txType(t) === 'expense');
+    const periodTxs = filterDashboard(state.transactions);
+    const incomes  = periodTxs.filter(t => txType(t) === 'income');
+    const expenses = periodTxs.filter(t => txType(t) === 'expense');
 
     // --- Донат расходов ---
     if (expenses.length > 0) {
@@ -393,34 +459,113 @@ function renderCharts() {
         }
     }
 
-    // --- Двойной линейный график по дням ---
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
-    const days = Array.from({length:daysInMonth},(_,i)=>i+1);
-    const expByDay = {}, incByDay = {};
-    expenses.forEach(t => { const d=new Date(t.datetime).getDate(); expByDay[d]=(expByDay[d]||0)+t.amount; });
-    incomes.forEach(t  => { const d=new Date(t.datetime).getDate(); incByDay[d]=(incByDay[d]||0)+t.amount; });
+    // --- Двойной линейный график (по дням или по месяцам — в зависимости от периода) ---
+    const buckets = buildTimeBuckets();
+    const expByBucket = {}, incByBucket = {};
+    expenses.forEach(t => { const k = bucketKey(t.datetime); expByBucket[k] = (expByBucket[k]||0) + t.amount; });
+    incomes.forEach(t  => { const k = bucketKey(t.datetime); incByBucket[k] = (incByBucket[k]||0) + t.amount; });
 
     const el = document.getElementById('line-chart');
     if (el) {
         state.charts['line-chart'] = new Chart(el, {
             type: 'line',
             data: {
-                labels: days.map(String),
+                labels: buckets.map(b => b.label),
                 datasets: [
-                    { label:'Расходы', data:days.map(d=>expByDay[d]||0), borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.07)', fill:true, tension:0.4, pointRadius:2 },
-                    { label:'Доходы',  data:days.map(d=>incByDay[d]||0), borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,0.07)',  fill:true, tension:0.4, pointRadius:2 },
+                    { label:'Расходы', data: buckets.map(b => expByBucket[b.key]||0), borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.07)', fill:true, tension:0.4, pointRadius:2 },
+                    { label:'Доходы',  data: buckets.map(b => incByBucket[b.key]||0), borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,0.07)',  fill:true, tension:0.4, pointRadius:2 },
                 ],
             },
             options: {
                 responsive:true, maintainAspectRatio:false,
                 plugins:{ legend:{ labels:{font:{size:10},boxWidth:12} } },
                 scales:{
-                    x:{ grid:{display:false}, ticks:{font:{size:9},maxTicksLimit:10} },
+                    x:{ grid:{display:false}, ticks:{font:{size:9},maxTicksLimit:12} },
                     y:{ beginAtZero:true, grid:{color:'rgba(0,0,0,0.04)'}, ticks:{font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}к`:v} },
                 },
             },
         });
     }
+}
+
+// Группировка для линейного графика дашборда: day=по часам, week/month=по дням, year=по месяцам,
+// custom=по дням если ≤ 31 день, иначе по месяцам.
+function bucketGranularity() {
+    const p = state.dashboardPeriod;
+    if (p === 'year')   return 'month';
+    if (p === 'day')    return 'hour';
+    if (p === 'custom' && state.dashboardRange) {
+        const from = new Date(state.dashboardRange.from + 'T00:00:00');
+        const to   = new Date(state.dashboardRange.to   + 'T00:00:00');
+        const days = Math.round((to - from) / 86400000) + 1;
+        return days > 31 ? 'month' : 'day';
+    }
+    return 'day';
+}
+
+function bucketKey(iso) {
+    const d = new Date(iso);
+    const g = bucketGranularity();
+    if (g === 'hour')  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}`;
+    if (g === 'month') return `${d.getFullYear()}-${d.getMonth()}`;
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function buildTimeBuckets() {
+    const g    = bucketGranularity();
+    const now  = new Date();
+    const p    = state.dashboardPeriod;
+    const out  = [];
+
+    if (g === 'hour') {
+        for (let h = 0; h < 24; h++) {
+            out.push({ key: `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${h}`, label: String(h).padStart(2,'0') });
+        }
+        return out;
+    }
+
+    if (g === 'month') {
+        if (p === 'year') {
+            for (let m = 0; m < 12; m++) {
+                out.push({ key: `${now.getFullYear()}-${m}`, label: MONTH_SHORT[m] });
+            }
+            return out;
+        }
+        // custom long-range
+        const from = new Date(state.dashboardRange.from + 'T00:00:00');
+        const to   = new Date(state.dashboardRange.to   + 'T00:00:00');
+        const cur  = new Date(from.getFullYear(), from.getMonth(), 1);
+        while (cur <= to) {
+            out.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, label: `${MONTH_SHORT[cur.getMonth()]} ${String(cur.getFullYear()).slice(2)}` });
+            cur.setMonth(cur.getMonth() + 1);
+        }
+        return out;
+    }
+
+    // дни
+    let from, to;
+    if (p === 'day') {
+        from = new Date(now); from.setHours(0,0,0,0);
+        to   = new Date(from);
+    } else if (p === 'week') {
+        to   = new Date(now); to.setHours(0,0,0,0);
+        from = new Date(to);  from.setDate(from.getDate() - 6);
+    } else if (p === 'month') {
+        from = new Date(now.getFullYear(), now.getMonth(), 1);
+        to   = new Date(now.getFullYear(), now.getMonth()+1, 0);
+    } else if (p === 'custom' && state.dashboardRange) {
+        from = new Date(state.dashboardRange.from + 'T00:00:00');
+        to   = new Date(state.dashboardRange.to   + 'T00:00:00');
+    } else {
+        from = new Date(now); from.setDate(1);
+        to   = new Date(now);
+    }
+    const cur = new Date(from);
+    while (cur <= to) {
+        out.push({ key: `${cur.getFullYear()}-${cur.getMonth()}-${cur.getDate()}`, label: String(cur.getDate()) });
+        cur.setDate(cur.getDate() + 1);
+    }
+    return out;
 }
 
 // ============================================================
@@ -494,6 +639,77 @@ function buildTxRow(tx) {
                 ${tx.description?`<p class="text-xs text-gray-300">${fmtDate(tx.datetime)}</p>`:''}
             </div>
         </div>`;
+}
+
+function attachDashboardPeriodHandlers() {
+    document.querySelectorAll('.dash-period-btn').forEach(btn =>
+        btn.addEventListener('click', () => {
+            const p = btn.dataset.period;
+            if (p === 'custom') {
+                // Открываем пикер: дефолт — текущий месяц, либо последний выбранный диапазон
+                if (!state.dashboardRange) {
+                    const now = new Date();
+                    state.dashboardRange = {
+                        from: toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+                        to:   toIsoDate(now),
+                    };
+                }
+                state.rangePickerOpen = true;
+            } else {
+                state.dashboardPeriod = p;
+            }
+            render();
+        })
+    );
+}
+
+function buildRangePicker() {
+    const r = state.dashboardRange || {};
+    return `
+        <div id="range-picker-backdrop"
+             class="fixed inset-0 bg-black/40 z-50 flex items-end justify-center"
+             style="padding-bottom:max(env(safe-area-inset-bottom),16px)">
+            <div class="bg-white rounded-t-3xl w-full max-w-md p-5 shadow-2xl">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-gray-900 text-lg">Произвольный период</h3>
+                    <button id="range-cancel" class="text-gray-400 text-2xl leading-none">×</button>
+                </div>
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <label class="block">
+                        <span class="text-xs text-gray-500 mb-1 block">С</span>
+                        <input type="date" id="range-from" value="${r.from||''}"
+                               class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">
+                    </label>
+                    <label class="block">
+                        <span class="text-xs text-gray-500 mb-1 block">По</span>
+                        <input type="date" id="range-to" value="${r.to||''}"
+                               class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">
+                    </label>
+                </div>
+                <button id="range-apply"
+                    class="w-full bg-indigo-600 text-white font-semibold py-3 rounded-xl active:opacity-80">
+                    Применить
+                </button>
+            </div>
+        </div>`;
+}
+
+function attachRangePickerHandlers() {
+    const close = () => { state.rangePickerOpen = false; render(); };
+    document.getElementById('range-cancel')?.addEventListener('click', close);
+    document.getElementById('range-picker-backdrop')?.addEventListener('click', e => {
+        if (e.target.id === 'range-picker-backdrop') close();
+    });
+    document.getElementById('range-apply')?.addEventListener('click', () => {
+        const from = document.getElementById('range-from')?.value;
+        const to   = document.getElementById('range-to')?.value;
+        if (!from || !to) { tg?.showAlert?.('Укажи обе даты'); return; }
+        if (from > to)   { tg?.showAlert?.('«С» должно быть раньше «По»'); return; }
+        state.dashboardRange  = { from, to };
+        state.dashboardPeriod = 'custom';
+        state.rangePickerOpen = false;
+        render();
+    });
 }
 
 function attachHistoryHandlers() {
