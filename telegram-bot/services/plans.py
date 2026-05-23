@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 PLAN_TRIAL   = "trial"
 PLAN_FREE    = "free"
 PLAN_PREMIUM = "premium"
+PLAN_OWNER = "owner"
+
+# Юзеры с безлимитным доступом. Username приходит без @.
+OWNER_USERNAMES: set[str] = {"sultanhodzjaevv", "aidar_ed"}
+OWNER_TELEGRAM_IDS: set[int] = {5557488294}
 PLAN_PRO     = "pro"
 
 # Действия с runtime-проверкой лимита. Остальные параметры декларативны.
@@ -70,6 +75,19 @@ LIMITS: dict[str, dict] = {
         "exports_per_month":       10,
         "mini_app_analytics":      "full",
     },
+    PLAN_OWNER: {
+        # Безлимит для владельца/допущенных юзеров: 1_000_000 ≈ ∞ для практики.
+        "transactions_per_day":    1_000_000,
+        "ai_questions_per_month":  1_000_000,
+        "voice_per_month":         1_000_000,
+        "photo_per_month":         1_000_000,
+        "history_days":            None,            # вся история
+        "categories_max":          1_000_000,
+        "recurring_payments_max":  1_000_000,
+        "csv_import":              True,
+        "exports_per_month":       1_000_000,
+        "mini_app_analytics":      "full",
+    },
 }
 
 # Цены в Telegram Stars (≈ $1 = 50⭐).
@@ -88,6 +106,7 @@ PLAN_TITLE = {
     PLAN_FREE:    "Free",
     PLAN_PREMIUM: "Premium",
     PLAN_PRO:     "Pro",
+    PLAN_OWNER:   "Owner",
 }
 
 # Какой ключ в LIMITS соответствует каждому action и какой период мерим.
@@ -118,20 +137,26 @@ def effective_plan(user: dict) -> str:
     Возвращает фактический план с учётом срока действия:
     - trial → free, если trial_until прошёл
     - premium/pro → free, если subscription_until прошёл (null = бессрочно)
+    - owner-allowlist (username/telegram_id) — всегда PLAN_OWNER (безлимит)
     """
     now = datetime.now(timezone.utc)
-    plan = (user or {}).get("plan") or PLAN_TRIAL
+    u = user or {}
+    uname = (u.get("username") or "").lstrip("@").lower()
+    tg_id = u.get("telegram_id")
+    if uname in OWNER_USERNAMES or tg_id in OWNER_TELEGRAM_IDS:
+        return PLAN_OWNER
+    plan = u.get("plan") or PLAN_TRIAL
 
     if plan == PLAN_TRIAL:
-        trial_until = _parse_ts(user.get("trial_until"))
+        trial_until = _parse_ts(u.get("trial_until"))
         if trial_until and trial_until > now:
             return PLAN_TRIAL
         return PLAN_FREE
 
     if plan in (PLAN_PREMIUM, PLAN_PRO):
-        sub_until = _parse_ts(user.get("subscription_until"))
+        sub_until = _parse_ts(u.get("subscription_until"))
         if sub_until is None:
-            return plan  # бессрочно (для владельца)
+            return plan  # бессрочно
         if sub_until > now:
             return plan
         return PLAN_FREE
