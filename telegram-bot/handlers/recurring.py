@@ -73,7 +73,7 @@ def _limit_for_user(telegram_id: int) -> int:
 
 @router.message(Command("myrec"))
 async def cmd_myrec(message: Message):
-    """Список регулярных платежей."""
+    """Список регулярных платежей с кнопкой удалить у каждого."""
     rps = storage.get_recurring_payments(message.from_user.id, only_active=True)
     if not rps:
         await message.answer(
@@ -82,16 +82,21 @@ async def cmd_myrec(message: Message):
         )
         return
     lines = ["🔁 <b>Регулярные платежи:</b>\n"]
+    rows = []
     for r in rps:
         next_at = r["next_run_at"][:10]
         kind = "доход" if r["type"] == "income" else "расход"
         lines.append(
             f"• <b>{r['amount']}</b> · {r['category']} · каждые {r['period_days']} дн · {kind}\n"
             f"  Следующая: {next_at}\n"
-            f"  «{r['description'] or '—'}»\n"
-            f"  <code>/delrec {r['id']}</code>"
+            f"  «{r['description'] or '—'}»"
         )
-    await message.answer("\n".join(lines), parse_mode="HTML")
+        rows.append([InlineKeyboardButton(
+            text=f"🗑 {r['amount']} · {r['category']}",
+            callback_data=f"delrec:{r['id']}",
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
 @router.message(Command("addrec"))
@@ -256,11 +261,35 @@ async def _addrec_cancel(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Command("delrec"))
 async def cmd_delrec(message: Message):
-    """Удалить регулярный платёж по id."""
-    args = (message.text or "").split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer("Формат: <code>/delrec &lt;id&gt;</code>. ID — из /myrec.", parse_mode="HTML")
+    """Открывает список регулярных платежей с кнопками «удалить»."""
+    rps = storage.get_recurring_payments(message.from_user.id, only_active=True)
+    if not rps:
+        await message.answer("У тебя нет регулярных платежей. Добавить — /addrec")
         return
-    rp_id = args[1].strip()
-    ok = storage.delete_recurring_payment(message.from_user.id, rp_id)
-    await message.answer("Удалено." if ok else "Не найдено. Проверь id через /myrec.")
+    rows = [[InlineKeyboardButton(
+        text=f"🗑 {r['amount']} · {r['category']} · каждые {r['period_days']} дн",
+        callback_data=f"delrec:{r['id']}",
+    )] for r in rps]
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data="delrec_cancel")])
+    await message.answer("Какой регулярный платёж удалить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("delrec:"))
+async def _delrec_click(callback: CallbackQuery):
+    rp_id = callback.data.split(":", 1)[1]
+    ok = storage.delete_recurring_payment(callback.from_user.id, rp_id)
+    await callback.answer("Удалено" if ok else "Не найдено", show_alert=not ok)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("Регулярный платёж удалён ✅" if ok else "Платёж не найден.")
+
+
+@router.callback_query(F.data == "delrec_cancel")
+async def _delrec_cancel(callback: CallbackQuery):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
