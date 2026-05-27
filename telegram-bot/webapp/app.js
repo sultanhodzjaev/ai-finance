@@ -179,6 +179,12 @@ function destroyChart(key) {
 // ============================================================
 // ИНИЦИАЛИЗАЦИЯ
 // ============================================================
+// Тема: dark если у <html> класс .dark (выставляется в index.html до рендера).
+function isDark() { return document.documentElement.classList.contains('dark'); }
+function chartTextColor()    { return isDark() ? '#a1a1aa' : '#71717a'; }
+function chartGridColor()    { return isDark() ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }
+function chartSurfaceColor() { return isDark() ? '#18181b' : '#ffffff'; }
+
 // Lucide-иконки рендерятся через <i data-lucide="имя">. Helper-удобство.
 function icon(name, cls = 'w-5 h-5') {
     return `<i data-lucide="${name}" class="${cls}"></i>`;
@@ -201,8 +207,11 @@ function showApp(html) {
     const app    = document.getElementById('app');
     if (loader) loader.style.display = 'none';
     if (app)    { app.style.display = 'block'; app.innerHTML = html; }
-    // Сканируем DOM и подменяем <i data-lucide=...> на SVG
-    if (window.lucide?.createIcons) window.lucide.createIcons();
+    // Сканируем DOM и подменяем <i data-lucide=...> на SVG.
+    // stroke-width 1.5 — тоньше дефолтных 2, ощущение премиум-iconography.
+    if (window.lucide?.createIcons) {
+        window.lucide.createIcons({ attrs: { 'stroke-width': 1.5 } });
+    }
 }
 
 async function init() {
@@ -332,50 +341,64 @@ function buildDashboard() {
 
     return `
         <div class="px-4 pt-5">
-            <div class="flex items-start justify-between mb-4">
+            <div class="flex items-start justify-between mb-5">
                 <div>
-                    <p class="text-gray-400 text-sm">Привет, ${state.me?.first_name||'Друг'}</p>
-                    <h1 class="text-2xl font-bold text-gray-900">${dashboardTitle()}</h1>
+                    <p class="eyebrow mb-1">Привет, ${state.me?.first_name||'Друг'}</p>
+                    <h1 class="h-display">${dashboardTitle()}</h1>
                 </div>
-                <div class="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center"
+                     style="background:var(--accent-soft);color:var(--accent)">
                     ${icon('wallet', 'w-5 h-5')}
                 </div>
             </div>
 
             <!-- Переключатель периода -->
-            <div class="flex gap-2 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+            <div class="flex gap-2 mb-5 overflow-x-auto pb-1 -mx-1 px-1">
                 ${periodOpts.map(f=>`
-                    <button class="dash-period-btn flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border
-                        ${state.dashboardPeriod===f.key ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}"
+                    <button class="dash-period-btn flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold border tracking-wide
+                        ${state.dashboardPeriod===f.key
+                            ? 'text-white'
+                            : 'bg-white text-gray-600 border-gray-200'}"
+                        ${state.dashboardPeriod===f.key
+                            ? 'style="background:var(--accent);border-color:var(--accent)"'
+                            : ''}
                         data-period="${f.key}">${f.label}</button>
                 `).join('')}
             </div>
 
-            <!-- 3 карточки: доходы / расходы / остаток -->
-            <div class="grid grid-cols-1 gap-3 mb-4">
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="hero-stat bg-white rounded-2xl p-4 shadow-sm relative overflow-hidden">
-                        <span class="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-emerald-500"></span>
-                        <p class="text-gray-400 text-[11px] uppercase tracking-wide font-medium mb-1 pl-2">Доход</p>
-                        <p class="text-xl font-semibold leading-tight text-gray-900 tabular-nums pl-2">${fmt(totalIncome)}</p>
-                        <p class="text-gray-400 text-xs mt-1 pl-2">${incomes.length} ${pluralTx(incomes.length)}</p>
-                    </div>
-                    <div class="hero-stat bg-white rounded-2xl p-4 shadow-sm relative overflow-hidden">
-                        <span class="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-rose-500"></span>
-                        <p class="text-gray-400 text-[11px] uppercase tracking-wide font-medium mb-1 pl-2">Расход</p>
-                        <p class="text-xl font-semibold leading-tight text-gray-900 tabular-nums pl-2">${fmt(totalExpense)}</p>
-                        <p class="text-gray-400 text-xs mt-1 pl-2">${expenses.length} ${pluralTx(expenses.length)}</p>
-                    </div>
+            <!-- HERO: Остаток — главная карточка -->
+            <div class="rounded-3xl p-6 text-white relative overflow-hidden mb-3"
+                 style="background:${balancePct
+                    ? 'radial-gradient(120% 100% at 0% 0%, #8b5cf6 0%, #6d28d9 45%, #4c1d95 100%)'
+                    : 'radial-gradient(120% 100% at 0% 0%, #fb7185 0%, #be123c 60%, #881337 100%)'}">
+                <div class="absolute -top-16 -right-10 w-52 h-52 rounded-full" style="background:rgba(255,255,255,0.06);filter:blur(2px)"></div>
+                <div class="absolute -bottom-20 -left-8 w-48 h-48 rounded-full" style="background:rgba(255,255,255,0.04);filter:blur(2px)"></div>
+                <div class="relative">
+                    <p class="eyebrow mb-2" style="color:rgba(255,255,255,0.55)">${dashboardBalanceLabel()}</p>
+                    <p class="hero-amount">${balancePct ? '+' : '−'}${fmt(balance)}</p>
+                    <p class="text-white/65 text-[13px] mt-3">${heroSubline(totalIncome, balance, balancePct)}</p>
                 </div>
-                <div class="rounded-2xl p-5 text-white shadow-md relative overflow-hidden"
-                     style="background:linear-gradient(135deg,${balancePct ? '#4f46e5 0%,#7c3aed 60%,#a855f7 100%' : '#e11d48 0%,#be123c 100%'})">
-                    <div class="absolute -top-12 -right-8 w-44 h-44 rounded-full" style="background:rgba(255,255,255,0.08)"></div>
-                    <div class="absolute -bottom-16 -left-6 w-40 h-40 rounded-full" style="background:rgba(255,255,255,0.05)"></div>
-                    <div class="relative">
-                        <p class="text-white/70 text-[11px] uppercase tracking-wide font-medium mb-1">${dashboardBalanceLabel()}</p>
-                        <p class="text-3xl font-bold tabular-nums leading-none">${balancePct ? '+' : '−'}${fmt(balance)}</p>
-                        <p class="text-white/70 text-xs mt-2">${heroSubline(totalIncome, balance, balancePct)}</p>
+            </div>
+
+            <!-- Secondary stats: Доход / Расход — пилюлями -->
+            <div class="grid grid-cols-2 gap-3 mb-5">
+                <div class="rounded-2xl p-4 relative overflow-hidden"
+                     style="background:var(--surface);border:1px solid var(--border)">
+                    <div class="flex items-center gap-1.5 mb-2">
+                        <span class="w-1.5 h-1.5 rounded-full" style="background:var(--positive)"></span>
+                        <p class="eyebrow" style="letter-spacing:0.1em">Доход</p>
                     </div>
+                    <p class="stat-amount" style="color:var(--text)">${fmt(totalIncome)}</p>
+                    <p class="text-[11px] mt-1.5" style="color:var(--text-faint)">${incomes.length} ${pluralTx(incomes.length)}</p>
+                </div>
+                <div class="rounded-2xl p-4 relative overflow-hidden"
+                     style="background:var(--surface);border:1px solid var(--border)">
+                    <div class="flex items-center gap-1.5 mb-2">
+                        <span class="w-1.5 h-1.5 rounded-full" style="background:var(--negative)"></span>
+                        <p class="eyebrow" style="letter-spacing:0.1em">Расход</p>
+                    </div>
+                    <p class="stat-amount" style="color:var(--text)">${fmt(totalExpense)}</p>
+                    <p class="text-[11px] mt-1.5" style="color:var(--text-faint)">${expenses.length} ${pluralTx(expenses.length)}</p>
                 </div>
             </div>
 
@@ -450,6 +473,9 @@ function renderCharts() {
     const incomes  = periodTxs.filter(t => txType(t) === 'income');
     const expenses = periodTxs.filter(t => txType(t) === 'expense');
 
+    const surface = chartSurfaceColor();
+    const txt     = chartTextColor();
+
     // --- Донат расходов ---
     if (expenses.length > 0) {
         const byCat = {};
@@ -461,10 +487,10 @@ function renderCharts() {
                 type: 'doughnut',
                 data: {
                     labels:   entries.map(([id]) => getCat(id).name),
-                    datasets: [{ data: entries.map(([,v])=>v), backgroundColor: entries.map(([id])=>EXPENSE_COLORS[id]||'#ccc'), borderWidth:2, borderColor:'#fff' }],
+                    datasets: [{ data: entries.map(([,v])=>v), backgroundColor: entries.map(([id])=>EXPENSE_COLORS[id]||'#ccc'), borderWidth:2, borderColor:surface }],
                 },
-                options: { responsive:true, maintainAspectRatio:false, cutout:'62%',
-                    plugins: { legend:{position:'right',labels:{font:{size:11},boxWidth:12,padding:8}},
+                options: { responsive:true, maintainAspectRatio:false, cutout:'68%',
+                    plugins: { legend:{position:'right',labels:{font:{size:11},boxWidth:12,padding:8,color:txt}},
                         tooltip:{callbacks:{label:ctx=>` ${fmt(ctx.raw)}`}} } },
             });
         }
@@ -481,10 +507,10 @@ function renderCharts() {
                 type: 'doughnut',
                 data: {
                     labels:   entries.map(([id]) => getCat(id).name),
-                    datasets: [{ data: entries.map(([,v])=>v), backgroundColor: entries.map(([id])=>INCOME_COLORS[id]||'#22c55e'), borderWidth:2, borderColor:'#fff' }],
+                    datasets: [{ data: entries.map(([,v])=>v), backgroundColor: entries.map(([id])=>INCOME_COLORS[id]||'#22c55e'), borderWidth:2, borderColor:surface }],
                 },
-                options: { responsive:true, maintainAspectRatio:false, cutout:'62%',
-                    plugins: { legend:{position:'right',labels:{font:{size:11},boxWidth:12,padding:8}},
+                options: { responsive:true, maintainAspectRatio:false, cutout:'68%',
+                    plugins: { legend:{position:'right',labels:{font:{size:11},boxWidth:12,padding:8,color:txt}},
                         tooltip:{callbacks:{label:ctx=>` +${fmt(ctx.raw)}`}} } },
             });
         }
@@ -509,10 +535,10 @@ function renderCharts() {
             },
             options: {
                 responsive:true, maintainAspectRatio:false,
-                plugins:{ legend:{ labels:{font:{size:10},boxWidth:12} } },
+                plugins:{ legend:{ labels:{font:{size:10},boxWidth:12,color:txt} } },
                 scales:{
-                    x:{ grid:{display:false}, ticks:{font:{size:9},maxTicksLimit:12} },
-                    y:{ beginAtZero:true, grid:{color:'rgba(0,0,0,0.04)'}, ticks:{font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}к`:v} },
+                    x:{ grid:{display:false}, ticks:{font:{size:9},maxTicksLimit:12,color:txt} },
+                    y:{ beginAtZero:true, grid:{color:chartGridColor()}, ticks:{font:{size:9},color:txt,callback:v=>v>=1000?`${(v/1000).toFixed(0)}к`:v} },
                 },
             },
         });

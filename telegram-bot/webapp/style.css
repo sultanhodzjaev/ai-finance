@@ -1,12 +1,40 @@
-/* Дополнительные стили для Telegram Mini App */
+/* ============================================================
+   AI-Финансист — Mini App
+   Палитра, типографика, dark mode.
+   Dark — primary mode; light — fallback для тех, у кого Telegram в светлой.
+   ============================================================ */
 
 :root {
-    --bg-color: #f9fafb;
-    --text-color: #1f2937;
-    --hint-color: #6b7280;
-    --button-color: #4f46e5;
-    --button-text-color: #ffffff;
-    --secondary-bg: #ffffff;
+    /* Light palette */
+    --bg:            #f5f5f7;
+    --surface:       #ffffff;
+    --surface-2:     #fafafa;
+    --border:        rgba(0, 0, 0, 0.06);
+    --hairline:      rgba(0, 0, 0, 0.05);
+    --text:          #0a0a0b;
+    --text-muted:    #71717a;   /* zinc-500 */
+    --text-faint:    #a1a1aa;   /* zinc-400 */
+    --accent:        #7c3aed;   /* violet-600 */
+    --accent-soft:   rgba(124, 58, 237, 0.08);
+    --positive:      #10b981;   /* emerald-500 */
+    --negative:      #f43f5e;   /* rose-500 */
+    --shadow-card:   0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+html.dark {
+    --bg:            #0a0a0b;
+    --surface:       #18181b;   /* zinc-900 */
+    --surface-2:     #1f1f23;
+    --border:        rgba(255, 255, 255, 0.06);
+    --hairline:      rgba(255, 255, 255, 0.05);
+    --text:          #fafafa;
+    --text-muted:    #a1a1aa;   /* zinc-400 */
+    --text-faint:    #71717a;   /* zinc-500 */
+    --accent:        #a78bfa;   /* violet-400 */
+    --accent-soft:   rgba(167, 139, 250, 0.12);
+    --positive:      #34d399;   /* emerald-400 */
+    --negative:      #fb7185;   /* rose-400 */
+    --shadow-card:   none;
 }
 
 * {
@@ -15,87 +43,149 @@
 }
 
 body {
-    background-color: var(--bg-color);
-    color: var(--text-color);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
     margin: 0;
     padding: 0;
     overflow-x: hidden;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-/* Плавные переходы между экранами */
-.screen-enter {
-    animation: fadeIn 0.2s ease-in-out;
+/* ============================================================
+   Override Tailwind utility classes for dark mode + premium feel.
+   Tailwind CDN не сгенерил dark: варианты, поэтому мы перехватываем
+   базовые классы через CSS-кастом, чтобы не переписывать весь JSX.
+   ============================================================ */
+
+/* Фон карточек */
+html.dark .bg-white                 { background-color: var(--surface) !important; }
+html.dark .bg-gray-50,
+html.dark .bg-gray-100              { background-color: var(--surface-2) !important; }
+html.dark .bg-indigo-100            { background-color: var(--accent-soft) !important; }
+html.dark .text-indigo-600          { color: var(--accent) !important; }
+
+/* Тексты */
+html.dark .text-gray-900            { color: var(--text) !important; }
+html.dark .text-gray-800,
+html.dark .text-gray-700,
+html.dark .text-gray-600            { color: #d4d4d8 !important; }   /* zinc-300 */
+html.dark .text-gray-500            { color: var(--text-muted) !important; }
+html.dark .text-gray-400            { color: var(--text-faint) !important; }
+html.dark .text-gray-300            { color: #52525b !important; }
+html.dark .text-red-500,
+html.dark .text-red-600             { color: var(--negative) !important; }
+html.dark .text-green-500,
+html.dark .text-green-600,
+html.dark .text-emerald-600         { color: var(--positive) !important; }
+
+/* Бордеры */
+html.dark .border-gray-100,
+html.dark .border-gray-200          { border-color: var(--border) !important; }
+
+/* Бэйджи / chips */
+html.dark .bg-green-100             { background-color: rgba(16, 185, 129, 0.15) !important; }
+html.dark .bg-emerald-50            { background-color: rgba(16, 185, 129, 0.12) !important; }
+html.dark .bg-red-100,
+html.dark .bg-rose-50               { background-color: rgba(244, 63, 94, 0.12) !important; }
+html.dark .text-green-700,
+html.dark .text-emerald-700         { color: #6ee7b7 !important; }   /* emerald-300 */
+html.dark .text-red-600             { color: #fda4af !important; }   /* rose-300 */
+
+/* Hairlines вместо толстых shadows: даже в light убираем грузные тени */
+.shadow, .shadow-sm, .shadow-md {
+    box-shadow: var(--shadow-card) !important;
+}
+html.dark .shadow,
+html.dark .shadow-sm,
+html.dark .shadow-md {
+    box-shadow: none !important;
+    border: 1px solid var(--border);
 }
 
+/* Кнопки выбора периода / категории в dark */
+html.dark .bg-indigo-600            { background-color: var(--accent) !important; }
+html.dark .text-white               { /* trust author — не трогаем */ }
+
+/* ============================================================
+   Микро-анимации, переходы
+   ============================================================ */
+
+.screen-enter { animation: fadeIn 0.2s ease-in-out; }
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Bottom sheet анимация */
-.sheet-slide-up {
-    animation: slideUp 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-}
-
+.sheet-slide-up { animation: slideUp 0.25s cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes slideUp {
     from { transform: translateY(100%); }
     to   { transform: translateY(0); }
 }
 
-/* Активное состояние кнопок */
 button:active {
     opacity: 0.75;
     transform: scale(0.97);
     transition: transform 0.1s, opacity 0.1s;
 }
 
-/* Карточки */
+/* ============================================================
+   Карточки и графики
+   ============================================================ */
+
 .card {
-    background: var(--secondary-bg);
+    background: var(--surface);
     border-radius: 16px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.04);
+    box-shadow: var(--shadow-card);
     padding: 20px;
     margin-bottom: 12px;
 }
 
-/* Canvas графиков */
-canvas {
-    max-height: 220px;
-}
+canvas { max-height: 220px; }
 
-/* Поле ввода суммы */
+/* ============================================================
+   Поле ввода суммы
+   ============================================================ */
+
 .amount-input {
-    font-size: 2.5rem;
-    font-weight: 700;
+    font-size: 2.75rem;
+    font-weight: 800;
     text-align: center;
     border: none;
     outline: none;
     background: transparent;
     width: 100%;
-    color: var(--text-color);
+    color: var(--text);
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
 }
 
-/* Категория — кнопка выбора */
+/* ============================================================
+   Категория — кнопка выбора
+   ============================================================ */
+
 .cat-btn {
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 8px 4px;
     border-radius: 12px;
-    border: 2px solid transparent;
-    background: #f3f4f6;
+    border: 1.5px solid transparent;
+    background: var(--surface-2);
     cursor: pointer;
     transition: all 0.15s;
     font-size: 0.65rem;
-    color: #4b5563;
-    gap: 2px;
+    color: var(--text-muted);
+    gap: 4px;
 }
 
+html.dark .cat-btn { background: var(--surface-2); }
+
 .cat-btn.selected {
-    border-color: #4f46e5;
-    background: #eef2ff;
-    color: #4f46e5;
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
     font-weight: 600;
 }
 
@@ -112,5 +202,39 @@ canvas {
     margin-bottom: 2px;
 }
 
-/* tabular-nums: цифры одинаковой ширины — суммы не «прыгают» */
+/* ============================================================
+   Премиум-typography утилиты
+   ============================================================ */
+
 .tabular-nums { font-variant-numeric: tabular-nums; }
+
+.hero-amount {
+    font-size: 2.875rem;          /* 46px */
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-amount {
+    font-size: 1.375rem;          /* 22px */
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--text-muted);
+}
+
+.h-display {
+    font-size: 1.75rem;           /* 28px */
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+}
