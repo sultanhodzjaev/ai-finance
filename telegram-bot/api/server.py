@@ -41,6 +41,23 @@ class IPRateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    """
+    Запрещает кэшировать HTML/JS/CSS Mini App. Telegram WebView держит файлы
+    подолгу, и юзеры видят старую UI после деплоя. Для API-роутов кэш не трогаем.
+    """
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/miniapp") and not path.startswith("/miniapp/api"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
+
 # Rate-limit раньше CORS, чтобы 429 уходил без лишних заголовков
 app.add_middleware(IPRateLimitMiddleware)
 
