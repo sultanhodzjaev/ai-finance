@@ -86,7 +86,20 @@ async def handle_advisor_question(message: Message, state: FSMContext):
     await thinking_msg.delete()
     await state.clear()
     storage.log_event(user_id, "ai_question", {"plan": plan, "length": len(message.text or "")})
-    await message.answer(answer)
+
+    # Gemini иногда оборачивает ответ в ```html``` или ```. Снимаем.
+    cleaned = answer.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned.rsplit("```", 1)[0].rstrip()
+
+    try:
+        await message.answer(cleaned, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        # Если HTML невалидный (например, незакрытый тег) — фолбэк plain text
+        logger.warning(f"HTML parse failed for advisor reply: {e}; falling back to plain text")
+        await message.answer(cleaned, disable_web_page_preview=True)
 
 
 @router.message(Command("help"))

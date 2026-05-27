@@ -225,84 +225,171 @@ async def transcribe_voice(voice_bytes: bytes, mime_type: str = "audio/ogg") -> 
         raise
 
 
+def _compute_metrics(transactions: list, currency: str, period_days: int = 30) -> dict:
+    """
+    Считает структурированные метрики из транзакций — топ-категории, дельту к
+    предыдущему периоду, аномалии, стрик. Возвращает JSON-сериализуемый dict.
+
+    Это предобработка ДО Gemini: LLM получает уже посчитанные цифры и работает
+    как formatter+writer, а не считает что-то сам (что у него получается плохо).
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    period_start = now - timedelta(days=period_days)
+    prev_start = now - timedelta(days=period_days * 2)
+
+    cur_income: dict[str, float] = {}
+    cur_expense: dict[str, float] = {}
+    prev_expense: dict[str, float] = {}
+    cur_tx_for_cat: dict[str, list] = {}
+    all_dates_with_tx: set = set()
+
+    for t in transactions:
+        try:
+            dt = datetime.fromisoformat(t["datetime"])
+        except Exception:
+            continue
+
+        amt = float(t.get("amount") or 0)
+        tx_type = t.get("type", "expense")
+        cat = t.get("category", "other")
+
+        if period_start <= dt <= now:
+            all_dates_with_tx.add(dt.date())
+            if tx_type == "income":
+                cur_income[cat] = cur_income.get(cat, 0) + amt
+            else:
+                cur_expense[cat] = cur_expense.get(cat, 0) + amt
+                cur_tx_for_cat.setdefault(cat, []).append({
+                    "date": dt.strftime("%d.%m"),
+                    "amount": amt,
+                    "description": (t.get("description") or "")[:60],
+                })
+        elif prev_start <= dt < period_start and tx_type != "income":
+            prev_expense[cat] = prev_expense.get(cat, 0) + amt
+
+    total_income = sum(cur_income.values())
+    total_expense = sum(cur_expense.values())
+    balance = total_income - total_expense
+    prev_total_expense = sum(prev_expense.values())
+
+    # Топ-категории расходов с % и дельтой к прошлому периоду
+    top_cats = []
+    for cat, amount in sorted(cur_expense.items(), key=lambda x: -x[1])[:5]:
+        pct = (amount / total_expense * 100) if total_expense > 0 else 0
+        prev_amount = prev_expense.get(cat, 0)
+        if prev_amount > 0:
+            delta_pct = round((amount - prev_amount) / prev_amount * 100)
+        else:
+            delta_pct = None  # нет прошлой базы для сравнения
+        top_cats.append({
+            "category": cat,
+            "amount": round(amount),
+            "pct_of_expense": round(pct, 1),
+            "delta_pct_vs_prev": delta_pct,
+            "tx_count": len(cur_tx_for_cat.get(cat, [])),
+        })
+
+    # Аномалии: транзакции которые >2× среднего по своей категории
+    anomalies = []
+    for cat, txs in cur_tx_for_cat.items():
+        if len(txs) < 3:
+            continue
+        amounts = [t["amount"] for t in txs]
+        avg = sum(amounts) / len(amounts)
+        for t in txs:
+            if t["amount"] >= max(avg * 2.0, avg + 500):
+                anomalies.append({
+                    "date": t["date"],
+                    "amount": round(t["amount"]),
+                    "category": cat,
+                    "description": t["description"],
+                    "avg_in_category": round(avg),
+                    "ratio": round(t["amount"] / avg, 1),
+                })
+    # Топ-3 аномалии по сумме
+    anomalies.sort(key=lambda x: -x["amount"])
+    anomalies = anomalies[:3]
+
+    # Стрик (дней подряд с транзакциями, считая от сегодня назад)
+    streak = 0
+    cursor = now.date()
+    while cursor in all_dates_with_tx:
+        streak += 1
+        cursor -= timedelta(days=1)
+
+    period_label = period_start.strftime("%d.%m") + "–" + now.strftime("%d.%m")
+
+    return {
+        "currency": currency,
+        "period_days": period_days,
+        "period_label": period_label,
+        "total_income": round(total_income),
+        "total_expense": round(total_expense),
+        "balance": round(balance),
+        "prev_total_expense": round(prev_total_expense),
+        "expense_delta_pct": (
+            round((total_expense - prev_total_expense) / prev_total_expense * 100)
+            if prev_total_expense > 0 else None
+        ),
+        "top_categories": top_cats,
+        "anomalies": anomalies,
+        "streak_days": streak,
+        "has_data": total_income > 0 or total_expense > 0,
+    }
+
+
 async def ask_financial_advisor(
     user_question: str,
     currency: str,
     transactions: list,
 ) -> str:
     """
-    Отправляет вопрос AI-финансисту с полным контекстом доходов и расходов.
+    Отвечает на финансовый вопрос юзера. Сначала считает метрики из транзакций
+    (top-категории, аномалии, дельта к прошлому периоду), затем подаёт их в
+    Gemini вместе с вопросом. LLM работает как writer, а не как калькулятор —
+    цифры в ответе гарантированно совпадают с данными.
     """
-    from datetime import datetime, timedelta
+    metrics = _compute_metrics(transactions, currency, period_days=30)
 
-    month_ago = datetime.now() - timedelta(days=30)
+    if not metrics["has_data"]:
+        return (
+            "Пока нет данных за последний месяц — добавь несколько трат "
+            "(пиши текстом, шли фото чека или голосовое), и я смогу нормально проанализировать."
+        )
 
-    # Разделяем транзакции за последний месяц на доходы и расходы
-    income_by_cat: dict[str, float] = {}
-    expense_by_cat: dict[str, float] = {}
-    first_dt = last_dt = None
-
-    for t in transactions:
-        try:
-            dt = datetime.fromisoformat(t["datetime"])
-            first_dt = min(first_dt, dt) if first_dt else dt
-            last_dt  = max(last_dt, dt)  if last_dt  else dt
-            if dt >= month_ago:
-                tx_type = t.get("type", "expense")
-                cat = t.get("category", "other")
-                if tx_type == "income":
-                    income_by_cat[cat] = income_by_cat.get(cat, 0) + t["amount"]
-                else:
-                    expense_by_cat[cat] = expense_by_cat.get(cat, 0) + t["amount"]
-        except Exception:
-            pass
-
-    total_income  = sum(income_by_cat.values())
-    total_expense = sum(expense_by_cat.values())
-    balance       = total_income - total_expense
-
-    income_list = "\n".join(
-        f"- {cat}: {amt:.0f} {currency}"
-        for cat, amt in sorted(income_by_cat.items(), key=lambda x: -x[1])
-    ) or "Доходов за последний месяц нет"
-
-    expense_list = "\n".join(
-        f"- {cat}: {amt:.0f} {currency}"
-        for cat, amt in sorted(expense_by_cat.items(), key=lambda x: -x[1])
-    ) or "Расходов за последний месяц нет"
-
-    # Все транзакции (последние 100)
-    if transactions:
-        all_tx_lines = []
-        for t in transactions[-100:]:
-            sign = "+" if t.get("type") == "income" else "-"
-            all_tx_lines.append(
-                f"- {t['datetime'][:10]}: {sign}{t['amount']} {currency} | "
-                f"{t.get('description', '—')} | {t.get('category', '?')}"
-            )
-        all_tx = "\n".join(all_tx_lines)
-    else:
-        all_tx = "Транзакций пока нет"
-
-    first_date = first_dt.strftime("%d.%m.%Y") if first_dt else "нет данных"
-    last_date  = last_dt.strftime("%d.%m.%Y")  if last_dt  else "нет данных"
+    metrics_json = json.dumps(metrics, ensure_ascii=False, indent=2)
 
     prompt = (
-        "Ты — личный AI-финансист пользователя. "
-        "Давай практичные, дружелюбные советы на русском языке. "
-        "Стиль: тёплый, на 'ты', без официоза, конкретные цифры.\n\n"
-        f"Валюта: {currency}\n"
-        f"Период данных: с {first_date} по {last_date}\n\n"
-        f"ДОХОДЫ за последний месяц:\n{income_list}\n"
-        f"Итого доходов: {total_income:.0f} {currency}\n\n"
-        f"РАСХОДЫ за последний месяц:\n{expense_list}\n"
-        f"Итого расходов: {total_expense:.0f} {currency}\n\n"
-        f"Остаток (доходы − расходы): {balance:+.0f} {currency}\n\n"
-        f"Все транзакции:\n{all_tx}\n\n"
-        f'Вопрос пользователя: "{user_question}"\n\n'
-        "Дай развёрнутый ответ (3-7 предложений). "
-        "Если данных мало — честно скажи об этом. "
-        "Если уместно — дай конкретный совет."
+        "Ты — личный AI-финансист. Тёплый тон, на 'ты', без воды. "
+        "Используй ТОЛЬКО цифры из metrics_json ниже — не выдумывай и не округляй.\n\n"
+        "ФОРМАТ ОТВЕТА — строго HTML для Telegram, такой структуры:\n\n"
+        "<b>📊 За {period_label}</b>\n"
+        "Доход: <b>{total_income} {currency}</b> · Расход: <b>{total_expense} {currency}</b> · "
+        "Остаток: <b>{balance:+d} {currency}</b>\n"
+        "{ строка с expense_delta_pct если есть: «📈 Расходы +X% к прошлому периоду» или «📉 −X%» }\n\n"
+        "<b>Куда уходит</b> (топ-3-5):\n"
+        "{ для каждой top_categories: «<b>Название</b> — <b>amount</b> ({pct}%)»\n"
+        "  + «<i>+X%</i>» или «<i>−X%</i>» к прошлому периоду, если delta_pct_vs_prev есть }\n\n"
+        "{ если есть anomalies, секция:\n"
+        "<b>Что выбивается:</b>\n"
+        "  для каждой: «⚡ <b>amount</b> — description (date). В X× больше среднего по категории.»\n"
+        "}\n\n"
+        "<b>2 действия которые реально помогут:</b>\n"
+        "  Конкретные, с цифрой экономии. НЕ «попробуй пересмотреть», "
+        "  а «отключи N подписок — сэкономишь Y/мес = Z/год».\n"
+        "  Привязывайся к аномалиям или к категориям с большим ростом.\n\n"
+        "{ если streak_days >= 3: «🔥 Streak {streak_days} дней подряд» }\n\n"
+        "ВАЖНО:\n"
+        "- Никаких «попробуй», «можно подумать», «было бы хорошо». Только конкретика.\n"
+        "- Каждая цифра должна быть из metrics_json.\n"
+        "- Если пользователь задал конкретный вопрос — отвечай НА НЕГО, можно отойти от формата.\n"
+        "- Названия категорий переводи на русский human-friendly (food → Еда, transport → Транспорт и т.д.).\n"
+        "- Используй <b>…</b> и <i>…</i> для акцентов, эмодзи минимально.\n"
+        "- Никаких ```html``` блоков и оборачивания — сразу HTML.\n\n"
+        f"metrics_json:\n{metrics_json}\n\n"
+        f'Вопрос пользователя: "{user_question[:300]}"\n'
     )
 
     try:
