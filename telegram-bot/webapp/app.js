@@ -89,7 +89,7 @@ function getCat(id) {
     return (
         state.expenseCategories.find(c => c.id === id) ||
         state.incomeCategories.find(c => c.id === id) ||
-        { id, name: id, emoji: '📦' }
+        { id, name: id, emoji: '📦', icon: 'package' }
     );
 }
 
@@ -137,6 +137,18 @@ function dashboardTitle() {
     return 'Период';
 }
 
+// Подпись под Остатком в hero-карточке. Прячемся от banal-копирайта:
+// если есть доход — показываем savings rate, иначе нейтральное сообщение.
+function heroSubline(totalIncome, balance, balancePct) {
+    if (!balancePct) return 'Расходы превышают доходы';
+    if (totalIncome > 0 && balance > 0) {
+        const savings = Math.round(balance / totalIncome * 100);
+        if (savings >= 5) return `Сохранил ${savings}% от дохода`;
+    }
+    if (balance > 0) return 'В плюсе';
+    return 'Баланс на нуле';
+}
+
 function dashboardBalanceLabel() {
     const p = state.dashboardPeriod;
     if (p === 'day')    return 'Остаток за день';
@@ -170,6 +182,18 @@ function destroyChart(key) {
 // Lucide-иконки рендерятся через <i data-lucide="имя">. Helper-удобство.
 function icon(name, cls = 'w-5 h-5') {
     return `<i data-lucide="${name}" class="${cls}"></i>`;
+}
+
+// Жетон категории: круглый «пилл» с цветным фоном (≈14% opacity) и Lucide-иконкой
+// цвета категории. Для кастомных категорий (без icon) — fallback на emoji.
+// size — диаметр в px (default 36), iconPx — размер иконки (default 18).
+function catBadge(cat, size = 36, iconPx = 18) {
+    const color = catColor(cat.id);
+    const style = `width:${size}px;height:${size}px;background:${color}22;color:${color};flex-shrink:0`;
+    const inner = cat.icon
+        ? `<i data-lucide="${cat.icon}" style="width:${iconPx}px;height:${iconPx}px;stroke-width:2"></i>`
+        : `<span style="font-size:${Math.round(iconPx * 1.1)}px;line-height:1">${cat.emoji || '📦'}</span>`;
+    return `<span class="inline-flex items-center justify-center rounded-full" style="${style}">${inner}</span>`;
 }
 
 function showApp(html) {
@@ -330,21 +354,28 @@ function buildDashboard() {
             <!-- 3 карточки: доходы / расходы / остаток -->
             <div class="grid grid-cols-1 gap-3 mb-4">
                 <div class="grid grid-cols-2 gap-3">
-                    <div class="bg-green-500 rounded-2xl p-4 text-white shadow">
-                        <p class="text-green-100 text-xs mb-1">Доходы</p>
-                        <p class="text-xl font-bold leading-tight">${fmt(totalIncome)}</p>
-                        <p class="text-green-200 text-xs mt-1">${incomes.length} ${pluralTx(incomes.length)}</p>
+                    <div class="hero-stat bg-white rounded-2xl p-4 shadow-sm relative overflow-hidden">
+                        <span class="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-emerald-500"></span>
+                        <p class="text-gray-400 text-[11px] uppercase tracking-wide font-medium mb-1 pl-2">Доход</p>
+                        <p class="text-xl font-semibold leading-tight text-gray-900 tabular-nums pl-2">${fmt(totalIncome)}</p>
+                        <p class="text-gray-400 text-xs mt-1 pl-2">${incomes.length} ${pluralTx(incomes.length)}</p>
                     </div>
-                    <div class="bg-red-500 rounded-2xl p-4 text-white shadow">
-                        <p class="text-red-100 text-xs mb-1">Расходы</p>
-                        <p class="text-xl font-bold leading-tight">${fmt(totalExpense)}</p>
-                        <p class="text-red-200 text-xs mt-1">${expenses.length} ${pluralTx(expenses.length)}</p>
+                    <div class="hero-stat bg-white rounded-2xl p-4 shadow-sm relative overflow-hidden">
+                        <span class="absolute left-0 top-3 bottom-3 w-1 rounded-r-full bg-rose-500"></span>
+                        <p class="text-gray-400 text-[11px] uppercase tracking-wide font-medium mb-1 pl-2">Расход</p>
+                        <p class="text-xl font-semibold leading-tight text-gray-900 tabular-nums pl-2">${fmt(totalExpense)}</p>
+                        <p class="text-gray-400 text-xs mt-1 pl-2">${expenses.length} ${pluralTx(expenses.length)}</p>
                     </div>
                 </div>
-                <div class="${balancePct ? 'bg-indigo-600' : 'bg-red-600'} rounded-2xl p-4 text-white shadow">
-                    <p class="text-white/70 text-xs mb-1">${dashboardBalanceLabel()}</p>
-                    <p class="text-2xl font-bold">${balancePct ? '+' : '−'}${fmt(balance)}</p>
-                    <p class="text-white/60 text-xs mt-1">${balancePct ? 'Отличный результат 🎉' : 'Расходы превышают доходы ⚠️'}</p>
+                <div class="rounded-2xl p-5 text-white shadow-md relative overflow-hidden"
+                     style="background:linear-gradient(135deg,${balancePct ? '#4f46e5 0%,#7c3aed 60%,#a855f7 100%' : '#e11d48 0%,#be123c 100%'})">
+                    <div class="absolute -top-12 -right-8 w-44 h-44 rounded-full" style="background:rgba(255,255,255,0.08)"></div>
+                    <div class="absolute -bottom-16 -left-6 w-40 h-40 rounded-full" style="background:rgba(255,255,255,0.05)"></div>
+                    <div class="relative">
+                        <p class="text-white/70 text-[11px] uppercase tracking-wide font-medium mb-1">${dashboardBalanceLabel()}</p>
+                        <p class="text-3xl font-bold tabular-nums leading-none">${balancePct ? '+' : '−'}${fmt(balance)}</p>
+                        <p class="text-white/70 text-xs mt-2">${heroSubline(totalIncome, balance, balancePct)}</p>
+                    </div>
                 </div>
             </div>
 
@@ -378,12 +409,12 @@ function buildDashboard() {
                                 const cat = getCat(id);
                                 const pct = totalExpense > 0 ? Math.round(sum/totalExpense*100) : 0;
                                 return `<div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="text-xl">${cat.emoji}</span>
-                                        <span class="text-sm text-gray-700">${cat.name}</span>
+                                    <div class="flex items-center gap-2.5">
+                                        ${catBadge(cat, 28, 15)}
+                                        <span class="text-sm text-gray-800">${cat.name}</span>
                                         <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">${pct}%</span>
                                     </div>
-                                    <span class="font-semibold text-sm text-red-600">${fmt(sum)}</span>
+                                    <span class="font-semibold text-sm text-gray-900 tabular-nums">${fmt(sum)}</span>
                                 </div>`;
                             }).join('')}
                         </div>
@@ -619,15 +650,13 @@ function buildHistory() {
 function buildTxRow(tx) {
     const cat     = getCat(tx.category);
     const isInc   = txType(tx) === 'income';
-    const amtColor = isInc ? 'text-green-600' : 'text-red-500';
-    const bgColor  = isInc ? '#22c55e22' : (EXPENSE_COLORS[tx.category]||'#ccc')+'22';
+    const amtColor = isInc ? 'text-emerald-600' : 'text-gray-900';
     const signedAmt = `${isInc?'+':'−'}${fmt(tx.amount)}`;
 
     return `
         <div class="tx-row bg-white rounded-2xl px-4 py-3.5 flex items-center gap-3 shadow-sm cursor-pointer active:opacity-70"
              data-id="${tx.id}">
-            <div class="w-11 h-11 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
-                 style="background-color:${bgColor}">${cat.emoji}</div>
+            ${catBadge(cat, 40, 19)}
             <div class="flex-1 min-w-0">
                 <p class="font-medium text-gray-900 text-sm">${cat.name}</p>
                 ${tx.description
@@ -635,7 +664,7 @@ function buildTxRow(tx) {
                     : `<p class="text-xs text-gray-400">${fmtDate(tx.datetime)}</p>`}
             </div>
             <div class="text-right flex-shrink-0">
-                <p class="font-bold text-sm ${amtColor}">${signedAmt}</p>
+                <p class="font-semibold text-sm ${amtColor} tabular-nums">${signedAmt}</p>
                 ${tx.description?`<p class="text-xs text-gray-300">${fmtDate(tx.datetime)}</p>`:''}
             </div>
         </div>`;
@@ -776,7 +805,7 @@ function buildAdd() {
                 <div class="grid grid-cols-5 gap-2" id="add-cat-grid">
                     ${cats.map((cat,i) => `
                         <button class="cat-btn ${i===0?'selected':''}" data-cat="${cat.id}">
-                            <span class="emoji">${cat.emoji}</span>
+                            <span class="cat-btn-icon">${catBadge(cat, 32, 16)}</span>
                             <span>${cat.name}</span>
                         </button>
                     `).join('')}
@@ -868,17 +897,16 @@ function buildBottomSheet() {
 }
 
 function buildSheetView(tx, cat, isInc, sourceLabel) {
-    const amtColor = isInc ? 'text-green-600' : 'text-red-500';
+    const amtColor = isInc ? 'text-emerald-600' : 'text-gray-900';
     const signedAmt = `${isInc?'+':'−'}${fmt(tx.amount)}`;
     const typeBadge = isInc
-        ? `<span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">Доход</span>`
-        : `<span class="bg-red-100 text-red-600 text-xs font-semibold px-2 py-0.5 rounded-full">Расход</span>`;
+        ? `<span class="bg-emerald-50 text-emerald-700 text-xs font-semibold px-2 py-0.5 rounded-full">Доход</span>`
+        : `<span class="bg-rose-50 text-rose-600 text-xs font-semibold px-2 py-0.5 rounded-full">Расход</span>`;
 
     return `
         <div class="text-center py-4">
-            <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-4xl mb-3"
-                 style="background-color:${isInc?'#22c55e22':((EXPENSE_COLORS[tx.category]||'#ccc')+'22')}">${cat.emoji}</div>
-            <p class="text-3xl font-bold ${amtColor}">${signedAmt}</p>
+            <div class="mx-auto mb-3 flex items-center justify-center">${catBadge(cat, 64, 30)}</div>
+            <p class="text-3xl font-bold ${amtColor} tabular-nums">${signedAmt}</p>
             <div class="flex items-center justify-center gap-2 mt-2">
                 <p class="text-gray-500">${cat.name}</p>
                 ${typeBadge}
@@ -923,7 +951,7 @@ function buildEditForm(tx) {
                 <div class="grid grid-cols-5 gap-2" id="edit-cat-grid">
                     ${cats.map(cat=>`
                         <button class="edit-cat-btn cat-btn ${cat.id===tx.category?'selected':''}" data-cat="${cat.id}">
-                            <span class="emoji">${cat.emoji}</span><span>${cat.name}</span>
+                            <span class="cat-btn-icon">${catBadge(cat, 32, 16)}</span><span>${cat.name}</span>
                         </button>`).join('')}
                 </div>
             </div>

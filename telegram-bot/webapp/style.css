@@ -103,3 +103,14 @@ canvas {
     font-size: 1.4rem;
     line-height: 1;
 }
+
+.cat-btn .cat-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    margin-bottom: 2px;
+}
+
+/* tabular-nums: цифры одинаковой ширины — суммы не «прыгают» */
+.tabular-nums { font-variant-numeric: tabular-nums; }

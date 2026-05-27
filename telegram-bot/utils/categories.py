@@ -1,25 +1,26 @@
-# Категории расходов (10 штук)
+# Категории расходов (10 штук).
+# emoji — для текстового UI в боте, icon — Lucide name для Mini App.
 CATEGORIES = [
-    {"id": "food",          "name": "Еда",           "emoji": "🍕"},
-    {"id": "groceries",     "name": "Продукты",       "emoji": "🛒"},
-    {"id": "transport",     "name": "Транспорт",      "emoji": "🚗"},
-    {"id": "entertainment", "name": "Развлечения",    "emoji": "🎬"},
-    {"id": "health",        "name": "Здоровье",       "emoji": "💊"},
-    {"id": "clothes",       "name": "Одежда",         "emoji": "👕"},
-    {"id": "home",          "name": "Жильё",          "emoji": "🏠"},
-    {"id": "communication", "name": "Связь",          "emoji": "📱"},
-    {"id": "gifts",         "name": "Подарки",        "emoji": "🎁"},
-    {"id": "other",         "name": "Другое",         "emoji": "📦"},
+    {"id": "food",          "name": "Еда",           "emoji": "🍕", "icon": "utensils"},
+    {"id": "groceries",     "name": "Продукты",       "emoji": "🛒", "icon": "shopping-cart"},
+    {"id": "transport",     "name": "Транспорт",      "emoji": "🚗", "icon": "car"},
+    {"id": "entertainment", "name": "Развлечения",    "emoji": "🎬", "icon": "clapperboard"},
+    {"id": "health",        "name": "Здоровье",       "emoji": "💊", "icon": "heart-pulse"},
+    {"id": "clothes",       "name": "Одежда",         "emoji": "👕", "icon": "shirt"},
+    {"id": "home",          "name": "Жильё",          "emoji": "🏠", "icon": "home"},
+    {"id": "communication", "name": "Связь",          "emoji": "📱", "icon": "smartphone"},
+    {"id": "gifts",         "name": "Подарки",        "emoji": "🎁", "icon": "gift"},
+    {"id": "other",         "name": "Другое",         "emoji": "📦", "icon": "package"},
 ]
 
 # Категории доходов (6 штук)
 INCOME_CATEGORIES = [
-    {"id": "salary",       "name": "Зарплата",    "emoji": "💼"},
-    {"id": "freelance",    "name": "Фриланс",     "emoji": "💻"},
-    {"id": "business",     "name": "Бизнес",      "emoji": "📈"},
-    {"id": "investment",   "name": "Инвестиции",  "emoji": "📊"},
-    {"id": "gift_income",  "name": "Подарок",     "emoji": "🎁"},
-    {"id": "other_income", "name": "Другое",      "emoji": "💰"},
+    {"id": "salary",       "name": "Зарплата",    "emoji": "💼", "icon": "briefcase"},
+    {"id": "freelance",    "name": "Фриланс",     "emoji": "💻", "icon": "laptop"},
+    {"id": "business",     "name": "Бизнес",      "emoji": "📈", "icon": "trending-up"},
+    {"id": "investment",   "name": "Инвестиции",  "emoji": "📊", "icon": "bar-chart-3"},
+    {"id": "gift_income",  "name": "Подарок",     "emoji": "🎁", "icon": "gift"},
+    {"id": "other_income", "name": "Другое",      "emoji": "💰", "icon": "coins"},
 ]
 
 # Словари для быстрого поиска
