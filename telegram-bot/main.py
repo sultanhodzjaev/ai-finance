@@ -14,6 +14,7 @@ os.environ.setdefault("LANG", "C.UTF-8")
 import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 
 from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals, categories, recurring
 from handlers import admin as admin_handlers
@@ -39,7 +40,18 @@ async def run_bot():
         raise ValueError("BOT_TOKEN не найден. Добавь его в Secrets.")
 
     bot = Bot(token=bot_token)
-    dp  = Dispatcher(storage=MemoryStorage())
+
+    # FSM-стейт переживает рестарт через Redis. Если REDIS_URL не задан или
+    # подключение падает — фолбэк на MemoryStorage, чтобы прод не лёг.
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        storage = RedisStorage.from_url(redis_url)
+        logger.info(f"FSM storage: Redis ({redis_url})")
+    except Exception as e:
+        logger.warning(f"Redis storage init failed ({e}); falling back to MemoryStorage")
+        storage = MemoryStorage()
+
+    dp = Dispatcher(storage=storage)
 
     # Anti-flood + ban-check на каждое входящее сообщение
     dp.message.middleware(BanAndFloodMiddleware())
