@@ -5,12 +5,16 @@ from datetime import datetime, timezone, timedelta
 
 from aiogram import Bot
 
-from services import storage
+from services import gemini, storage
 
 logger = logging.getLogger(__name__)
 
 # Asia/Bishkek = UTC+6. Ежедневное напоминание в 21:00 Bishkek = 15:00 UTC.
 DAILY_REMINDER_UTC_HOUR = 15
+# Weekly summary — воскресенье 20:00 Bishkek = воскресенье 14:00 UTC.
+# weekday(): Mon=0 … Sun=6.
+WEEKLY_SUMMARY_UTC_HOUR = 14
+WEEKLY_SUMMARY_WEEKDAY = 6
 
 
 async def _send_safe(bot: Bot, chat_id: int, text: str) -> bool:
@@ -62,6 +66,50 @@ async def trial_sweep(bot: Bot) -> None:
 
     if warned or expired:
         logger.info(f"trial_sweep: warned={warned}, expired={expired}")
+
+
+async def weekly_summary(bot: Bot) -> None:
+    """
+    Раз в неделю шлёт активным юзерам итоги последних 7 дней —
+    топ-категории, дельта к прошлой неделе, аномалии, одно действие.
+    Текст готовит gemini.generate_weekly_summary.
+    """
+    sent = 0
+    skipped = 0
+    for u in storage.find_active_users(within_days=14):
+        uid = u.get("telegram_id")
+        if not uid:
+            continue
+        if storage.is_banned(uid):
+            continue
+        currency = u.get("currency") or "KGS"
+        first_name = u.get("first_name") or ""
+        try:
+            txs = storage.get_transactions(uid, since_days=14)
+            html = await gemini.generate_weekly_summary(currency, txs, first_name=first_name)
+        except Exception as e:
+            logger.warning(f"weekly_summary build for {uid} failed: {e}")
+            continue
+        if not html:
+            skipped += 1
+            continue
+
+        cleaned = html.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0].rstrip()
+
+        try:
+            await bot.send_message(uid, cleaned, parse_mode="HTML", disable_web_page_preview=True)
+            sent += 1
+            storage.log_event(uid, "weekly_summary_sent", {})
+        except Exception as e:
+            logger.warning(f"weekly_summary send to {uid} failed: {e}")
+        # Bot API лимит ~30 msg/sec — закладываем запас.
+        await asyncio.sleep(0.05)
+
+    logger.info(f"weekly_summary: sent={sent}, skipped_no_data={skipped}")
 
 
 async def daily_reminders(bot: Bot) -> None:
@@ -161,6 +209,7 @@ async def scheduler_loop(bot: Bot) -> None:
     """
     logger.info("scheduler_loop: started")
     last_reminder_date = None
+    last_weekly_date = None
 
     while True:
         try:
@@ -173,6 +222,13 @@ async def scheduler_loop(bot: Bot) -> None:
             if now_utc.hour == DAILY_REMINDER_UTC_HOUR and last_reminder_date != today_utc:
                 await daily_reminders(bot)
                 last_reminder_date = today_utc
+            if (
+                now_utc.weekday() == WEEKLY_SUMMARY_WEEKDAY
+                and now_utc.hour == WEEKLY_SUMMARY_UTC_HOUR
+                and last_weekly_date != today_utc
+            ):
+                await weekly_summary(bot)
+                last_weekly_date = today_utc
         except Exception as e:
             logger.error(f"scheduler_loop tick failed: {e}")
 

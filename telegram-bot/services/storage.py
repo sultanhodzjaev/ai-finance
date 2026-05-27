@@ -494,6 +494,28 @@ def find_expired_trials() -> list[dict]:
         return []
 
 
+def find_active_users(within_days: int = 14) -> list[dict]:
+    """
+    Возвращает юзеров, у которых была хотя бы одна транзакция за последние N дней.
+    Используется для weekly summary и других массовых рассылок —
+    мёртвых юзеров не трогаем.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=within_days)).isoformat()
+    try:
+        active = _client().table("transactions").select("telegram_id") \
+            .gte("created_at", cutoff).execute().data or []
+        active_ids = list({r["telegram_id"] for r in active})
+        if not active_ids:
+            return []
+        res = _client().table("users").select("telegram_id,first_name,currency") \
+            .in_("telegram_id", active_ids).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"find_active_users: {e}")
+        return []
+
+
 def find_users_without_transactions_today() -> list[dict]:
     """
     Возвращает активных юзеров, которые сегодня (UTC) ещё не записали ни одной транзакции.

@@ -340,23 +340,110 @@ def _compute_metrics(transactions: list, currency: str, period_days: int = 30) -
     }
 
 
+def parse_period_from_question(question: str) -> tuple[int, str]:
+    """
+    Достаёт период из вопроса юзера. Возвращает (period_days, label).
+    Дефолт — 30 дней. Регистронезависимо.
+    """
+    q = (question or "").lower()
+    # Порядок важен: сначала более специфичные паттерны.
+    patterns = [
+        (r"\b(за\s+)?сегодня\b", 1, "сегодня"),
+        (r"\b(за\s+)?вчера\b", 2, "за вчера"),
+        (r"\b(за\s+(прошлую\s+)?недел[юя]|за\s+7\s+дней|за\s+неделю)\b", 7, "за неделю"),
+        (r"\b(за\s+две\s+недели|за\s+14\s+дней)\b", 14, "за 2 недели"),
+        (r"\b(за\s+(прошлый\s+)?месяц|за\s+30\s+дней)\b", 30, "за месяц"),
+        (r"\b(за\s+квартал|за\s+90\s+дней|за\s+3\s+месяца)\b", 90, "за квартал"),
+        (r"\b(за\s+полгода|за\s+6\s+месяцев|за\s+180\s+дней)\b", 180, "за полгода"),
+        (r"\b(за\s+год|за\s+12\s+месяцев|за\s+365\s+дней)\b", 365, "за год"),
+    ]
+    for pattern, days, label in patterns:
+        if re.search(pattern, q):
+            return days, label
+    # Явное число дней: «за 45 дней»
+    m = re.search(r"за\s+(\d{1,3})\s+дн", q)
+    if m:
+        days = int(m.group(1))
+        if 1 <= days <= 365:
+            return days, f"за {days} дн."
+    return 30, "за месяц"
+
+
+async def generate_weekly_summary(currency: str, transactions: list, first_name: str = "") -> str | None:
+    """
+    Готовит еженедельный summary для пуш-рассылки. Период = 7 дней.
+    Возвращает HTML-текст или None если данных за неделю нет (пропускаем юзера).
+    """
+    metrics = _compute_metrics(transactions, currency, period_days=7)
+    if not metrics["has_data"]:
+        return None
+
+    metrics_json = json.dumps(metrics, ensure_ascii=False, indent=2)
+    name_hint = first_name.strip() or "Друг"
+
+    prompt = (
+        "Ты — личный AI-финансист. Сформулируй короткий еженедельный summary для пуш-сообщения "
+        "в Telegram. Тёплый тон, на 'ты'. Используй ТОЛЬКО цифры из metrics_json.\n\n"
+        "ФОРМАТ — строго HTML, такой структуры:\n\n"
+        f"<b>📊 Итоги недели, {name_hint}</b>\n"
+        "{period_label}\n\n"
+        "Доход: <b>{total_income} {currency}</b> · Расход: <b>{total_expense} {currency}</b> · "
+        "Остаток: <b>{balance:+d} {currency}</b>\n"
+        "{ если expense_delta_pct != null: «📈 Расходы +X% к прошлой неделе» или «📉 −X%» }\n\n"
+        "<b>Куда уходило</b> (топ-3):\n"
+        "  для каждой top_categories[:3]: «<b>Название</b> — <b>amount {currency}</b> ({pct}%)»\n"
+        "  + <i>+X%</i> или <i>−X%</i> к прошлой неделе, если delta_pct_vs_prev есть.\n\n"
+        "{ если anomalies есть, секция:\n"
+        "<b>Что выбилось:</b>\n"
+        "  для каждой: «⚡ <b>amount {currency}</b> — description (date). В X× больше среднего.»\n"
+        "}\n\n"
+        "{ если streak_days >= 3: «🔥 Streak {streak_days} дней подряд» }\n\n"
+        "<b>Что сделать на следующей неделе:</b>\n"
+        "  Одно конкретное действие с цифрой экономии. НЕ «попробуй». "
+        "  Привязывайся к категории с большим ростом или к аномалии.\n\n"
+        "В конце — короткая строка-CTA: «Спросить детальнее — /ask».\n\n"
+        "ВАЖНО:\n"
+        "- Каждая цифра — из metrics_json.\n"
+        "- Названия категорий переводи: food→Еда, groceries→Продукты, transport→Транспорт, "
+        "entertainment→Развлечения, health→Здоровье, clothes→Одежда, home→Жильё, "
+        "communication→Связь, gifts→Подарки, other→Другое, salary→Зарплата, freelance→Фриланс, "
+        "business→Бизнес, investment→Инвестиции, gift_income→Подарок, other_income→Другое.\n"
+        "- Используй <b>…</b> и <i>…</i>, эмодзи минимально.\n"
+        "- Никаких ```html``` блоков — сразу HTML.\n\n"
+        f"metrics_json:\n{metrics_json}\n"
+    )
+
+    try:
+        return await _generate([{"parts": [{"text": prompt}]}])
+    except Exception as e:
+        logger.error(f"generate_weekly_summary error: {e}")
+        raise
+
+
 async def ask_financial_advisor(
     user_question: str,
     currency: str,
     transactions: list,
+    period_days: int | None = None,
+    period_label_hint: str | None = None,
 ) -> str:
     """
     Отвечает на финансовый вопрос юзера. Сначала считает метрики из транзакций
     (top-категории, аномалии, дельта к прошлому периоду), затем подаёт их в
     Gemini вместе с вопросом. LLM работает как writer, а не как калькулятор —
     цифры в ответе гарантированно совпадают с данными.
+
+    period_days может быть передан напрямую; иначе вытаскивается из вопроса.
     """
-    metrics = _compute_metrics(transactions, currency, period_days=30)
+    if period_days is None:
+        period_days, period_label_hint = parse_period_from_question(user_question)
+    metrics = _compute_metrics(transactions, currency, period_days=period_days)
 
     if not metrics["has_data"]:
         return (
-            "Пока нет данных за последний месяц — добавь несколько трат "
-            "(пиши текстом, шли фото чека или голосовое), и я смогу нормально проанализировать."
+            f"Пока нет данных за выбранный период ({period_label_hint or 'месяц'}) — "
+            "добавь несколько трат (пиши текстом, шли фото чека или голосовое), "
+            "и я смогу нормально проанализировать."
         )
 
     metrics_json = json.dumps(metrics, ensure_ascii=False, indent=2)
