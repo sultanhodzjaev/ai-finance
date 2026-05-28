@@ -88,9 +88,27 @@ def main_inline_kb() -> InlineKeyboardMarkup:
 def settings_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💱 Сменить валюту", callback_data="change_currency")],
+        [InlineKeyboardButton(text="🏷 Категории",      callback_data="open_categories")],
+        [InlineKeyboardButton(text="🔁 Регулярные платежи", callback_data="open_recurring")],
         [InlineKeyboardButton(text="💎 Управление подпиской", callback_data="show_subscription")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="show_invite")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="show_help")],
+    ])
+
+
+def categories_submenu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Мои категории", callback_data="cats_list")],
+        [InlineKeyboardButton(text="➕ Добавить",       callback_data="cats_add")],
+        [InlineKeyboardButton(text="🗑 Удалить",        callback_data="cats_delete")],
+    ])
+
+
+def recurring_submenu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Мои регулярные", callback_data="rec_list")],
+        [InlineKeyboardButton(text="➕ Добавить",        callback_data="rec_add")],
+        [InlineKeyboardButton(text="🗑 Удалить",         callback_data="rec_delete")],
     ])
 
 
@@ -210,6 +228,33 @@ async def cb_change_currency(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "💱 Выбери новую валюту:",
         reply_markup=currency_picker_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "open_categories")
+async def cb_open_categories(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer(
+        "🏷 <b>Категории</b>\n\n"
+        "Здесь можно завести свои категории — пока они показываются в Mini App "
+        "(дашборд и графики). В чат-боте при записи трат я по-прежнему выбираю из "
+        "основного набора.",
+        parse_mode="HTML",
+        reply_markup=categories_submenu_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "open_recurring")
+async def cb_open_recurring(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer(
+        "🔁 <b>Регулярные платежи</b>\n\n"
+        "Списания, которые повторяются — подписки, аренда, зарплата. Я сам создаю "
+        "транзакцию когда подходит дата.",
+        parse_mode="HTML",
+        reply_markup=recurring_submenu_kb(),
     )
     await callback.answer()
 

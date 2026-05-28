@@ -101,18 +101,17 @@ def _format_recurring_category(cat_value: str) -> str:
     return cat_value
 
 
-@router.message(Command("myrec"))
-async def cmd_myrec(message: Message):
-    """Список регулярных платежей с кнопкой удалить у каждого."""
-    rps = storage.get_recurring_payments(message.from_user.id, only_active=True)
+async def _send_myrec(user_id: int, send) -> None:
+    """Общая логика /myrec и callback rec_list."""
+    rps = storage.get_recurring_payments(user_id, only_active=True)
     if not rps:
-        await message.answer(
+        await send(
             "У тебя пока нет регулярных платежей.\n\n"
             "Добавить — просто нажми /addrec, бот спросит сумму, категорию и период по шагам.",
         )
         return
 
-    user = storage.get_user(message.from_user.id) or {}
+    user = storage.get_user(user_id) or {}
     currency = user.get("currency") or "KGS"
 
     lines = ["🔁 <b>Регулярные платежи:</b>\n"]
@@ -132,18 +131,26 @@ async def cmd_myrec(message: Message):
             callback_data=f"delrec:{r['id']}",
         )])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    await send("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
 
-@router.message(Command("addrec"))
-async def cmd_addrec(message: Message, state: FSMContext):
-    """Запуск пошагового диалога добавления регулярного платежа."""
-    # Лимит проверяем сразу — не тратим время юзера если упрётся в потолок
-    uid = message.from_user.id
+@router.message(Command("myrec"))
+async def cmd_myrec(message: Message):
+    await _send_myrec(message.from_user.id, message.answer)
+
+
+@router.callback_query(F.data == "rec_list")
+async def cb_rec_list(callback: CallbackQuery):
+    await _send_myrec(callback.from_user.id, callback.message.answer)
+    await callback.answer()
+
+
+async def _start_addrec(uid: int, send, state: FSMContext) -> None:
+    """Общая логика /addrec и callback rec_add."""
     cap = _limit_for_user(uid)
     have = storage.count_recurring_payments(uid)
     if cap and have >= cap:
-        await message.answer(
+        await send(
             f"Лимит регулярных платежей исчерпан ({have}/{cap}). Подними план — /upgrade",
             parse_mode="HTML",
         )
@@ -151,12 +158,23 @@ async def cmd_addrec(message: Message, state: FSMContext):
         return
 
     await state.set_state(AddRec.waiting_amount)
-    await message.answer(
+    await send(
         "💵 <b>Новый регулярный платёж</b>\n\n"
         "Шаг 1/5. Введи <b>сумму</b> (числом):",
         parse_mode="HTML",
         reply_markup=_cancel_kb(),
     )
+
+
+@router.message(Command("addrec"))
+async def cmd_addrec(message: Message, state: FSMContext):
+    await _start_addrec(message.from_user.id, message.answer, state)
+
+
+@router.callback_query(F.data == "rec_add")
+async def cb_rec_add(callback: CallbackQuery, state: FSMContext):
+    await _start_addrec(callback.from_user.id, callback.message.answer, state)
+    await callback.answer()
 
 
 @router.message(AddRec.waiting_amount)
@@ -317,21 +335,31 @@ async def _addrec_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Создание регулярного платежа отменено.")
 
 
-@router.message(Command("delrec"))
-async def cmd_delrec(message: Message):
-    """Открывает список регулярных платежей с кнопками «удалить»."""
-    rps = storage.get_recurring_payments(message.from_user.id, only_active=True)
+async def _send_delrec_list(user_id: int, send) -> None:
+    """Общая логика /delrec и callback rec_delete."""
+    rps = storage.get_recurring_payments(user_id, only_active=True)
     if not rps:
-        await message.answer("У тебя нет регулярных платежей. Добавить — /addrec")
+        await send("У тебя нет регулярных платежей. Добавить — кнопка «➕ Добавить».")
         return
-    user = storage.get_user(message.from_user.id) or {}
+    user = storage.get_user(user_id) or {}
     currency = user.get("currency") or "KGS"
     rows = [[InlineKeyboardButton(
         text=f"🗑 {format_amount(float(r['amount']), currency)} · {_format_recurring_category(r['category'])} · каждые {r['period_days']} дн",
         callback_data=f"delrec:{r['id']}",
     )] for r in rps]
     rows.append([InlineKeyboardButton(text="Отмена", callback_data="delrec_cancel")])
-    await message.answer("Какой регулярный платёж удалить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await send("Какой регулярный платёж удалить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.message(Command("delrec"))
+async def cmd_delrec(message: Message):
+    await _send_delrec_list(message.from_user.id, message.answer)
+
+
+@router.callback_query(F.data == "rec_delete")
+async def cb_rec_delete(callback: CallbackQuery):
+    await _send_delrec_list(callback.from_user.id, callback.message.answer)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("delrec:"))
