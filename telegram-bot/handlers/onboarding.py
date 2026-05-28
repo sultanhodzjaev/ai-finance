@@ -5,7 +5,6 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton,
 )
 
 from services import storage, plans
@@ -39,17 +38,18 @@ def currency_picker_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def main_kb() -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура внизу чата — главные действия без команд."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 План"), KeyboardButton(text="📈 Статистика")],
-            [KeyboardButton(text="🤖 AI-финансист"), KeyboardButton(text="⚙️ Настройки")],
+def main_inline_kb() -> InlineKeyboardMarkup:
+    """Главное меню — inline-кнопки прямо под сообщением бота."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 План",       callback_data="show_plan"),
+            InlineKeyboardButton(text="📈 Статистика", callback_data="show_stats"),
         ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Напиши трату или выбери действие",
-    )
+        [
+            InlineKeyboardButton(text="🤖 AI-финансист", callback_data="ask_advisor"),
+            InlineKeyboardButton(text="⚙️ Настройки",    callback_data="open_settings"),
+        ],
+    ])
 
 
 def settings_kb() -> InlineKeyboardMarkup:
@@ -79,9 +79,9 @@ async def _send_trial_intro(message_or_query, currency: str, first_name: str) ->
         f"Я сам определю сумму, категорию и сохраню."
     )
     if isinstance(message_or_query, CallbackQuery):
-        await message_or_query.message.answer(text, parse_mode="HTML", reply_markup=main_kb())
+        await message_or_query.message.answer(text, parse_mode="HTML", reply_markup=main_inline_kb())
     else:
-        await message_or_query.answer(text, parse_mode="HTML", reply_markup=main_kb())
+        await message_or_query.answer(text, parse_mode="HTML", reply_markup=main_inline_kb())
 
 
 @router.callback_query(F.data.startswith("set_currency:"))
@@ -104,7 +104,7 @@ async def cb_set_currency(callback: CallbackQuery):
             f"💱 Валюта обновлена: <b>{code}</b>.\n"
             f"Все новые траты будут в этой валюте. Старые записи не пересчитываются.",
             parse_mode="HTML",
-            reply_markup=main_kb(),
+            reply_markup=main_inline_kb(),
         )
     await callback.answer()
 
@@ -113,20 +113,39 @@ async def cb_set_currency(callback: CallbackQuery):
 # /settings и кнопка «⚙️ Настройки»
 # ---------------------------------------------------------------------------
 
-@router.message(Command("settings"))
-@router.message(F.text == "⚙️ Настройки")
-async def cmd_settings(message: Message):
-    user = storage.get_user(message.from_user.id) or {}
+def _settings_text(user: dict) -> str:
     currency = user.get("currency") or "—"
     plan = plans.effective_plan(user)
     plan_title = plans.PLAN_TITLE.get(plan, plan)
-    await message.answer(
+    return (
         f"⚙️ <b>Настройки</b>\n\n"
         f"💱 Валюта: <b>{currency}</b>\n"
-        f"📋 План: <b>{plan_title}</b>\n",
-        parse_mode="HTML",
-        reply_markup=settings_kb(),
+        f"📋 План: <b>{plan_title}</b>\n"
     )
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message):
+    user = storage.get_user(message.from_user.id) or {}
+    await message.answer(_settings_text(user), parse_mode="HTML", reply_markup=settings_kb())
+
+
+@router.callback_query(F.data == "open_settings")
+async def cb_open_settings(callback: CallbackQuery):
+    user = storage.get_user(callback.from_user.id) or {}
+    await callback.message.answer(_settings_text(user), parse_mode="HTML", reply_markup=settings_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "show_plan")
+async def cb_show_plan(callback: CallbackQuery):
+    from handlers.plan import build_plan_text
+    text = build_plan_text(callback.from_user.id)
+    if text is None:
+        await callback.message.answer("Сначала нажми /start — я тебя ещё не вижу в базе.")
+    else:
+        await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "change_currency")

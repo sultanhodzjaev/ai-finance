@@ -2,10 +2,10 @@ import logging
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardRemove
 
 from services import storage
-from handlers.onboarding import currency_picker_kb, main_kb
+from handlers.onboarding import currency_picker_kb, main_inline_kb
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -93,11 +93,13 @@ async def cmd_start(message: Message):
         )
         return
 
-    # Возвращающийся юзер → лёгкое приветствие + постоянная клавиатура внизу
+    # Возвращающийся юзер: приветствие шлём с ReplyKeyboardRemove(), чтобы стереть legacy
+    # persistent-клавиатуру у юзеров прошлой версии; следующим сообщением — inline-меню.
     await message.answer(
         f"👋 С возвращением, {first_name}!\n\n"
-        "Напиши трату обычным сообщением или выбери действие ниже 👇"
+        "Напиши трату обычным сообщением или выбери действие 👇"
         f"{referral_note}",
         parse_mode="HTML",
-        reply_markup=main_kb(),
+        reply_markup=ReplyKeyboardRemove(),
     )
+    await message.answer("Меню 👇", reply_markup=main_inline_kb())

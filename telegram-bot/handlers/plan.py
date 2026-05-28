@@ -75,26 +75,20 @@ def _upgrade_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-@router.message(Command("plan"))
-async def cmd_plan(message: Message):
-    """Показывает текущий план юзера и его лимиты."""
-    user_id = message.from_user.id
+def build_plan_text(user_id: int) -> str | None:
+    """Собирает текст /plan для юзера. None — если юзера нет в базе."""
     user = storage.get_user(user_id)
     if not user:
-        await message.answer("Сначала нажми /start — я тебя ещё не вижу в базе.")
-        return
+        return None
 
     plan = plans.effective_plan(user)
     title = plans.PLAN_TITLE.get(plan, plan)
 
-    # Когда что заканчивается
     if plan == plans.PLAN_TRIAL:
-        time_left = _fmt_remaining(user.get("trial_until"))
-        time_line = f"⏳ До конца триала: <b>{time_left}</b>"
+        time_line = f"⏳ До конца триала: <b>{_fmt_remaining(user.get('trial_until'))}</b>"
     elif plan in (plans.PLAN_PREMIUM, plans.PLAN_PRO):
         if user.get("subscription_until"):
-            time_left = _fmt_remaining(user.get("subscription_until"))
-            time_line = f"⏳ Подписка до: <b>{time_left}</b>"
+            time_line = f"⏳ Подписка до: <b>{_fmt_remaining(user.get('subscription_until'))}</b>"
         else:
             time_line = "♾️ Подписка бессрочная"
     else:
@@ -117,12 +111,20 @@ async def cmd_plan(message: Message):
         f"{_line('Фото чеков', 'photo')}\n"
         f"{_line('Вопросов финансисту', 'ai_question')}\n"
     )
-
     if plan in (plans.PLAN_FREE, plans.PLAN_TRIAL):
         text += "\nЧтобы снять ограничения — /upgrade"
     elif plan == plans.PLAN_PREMIUM:
         text += "\nХочешь больше лимитов? Pro — /upgrade"
+    return text
 
+
+@router.message(Command("plan"))
+async def cmd_plan(message: Message):
+    """Показывает текущий план юзера и его лимиты."""
+    text = build_plan_text(message.from_user.id)
+    if text is None:
+        await message.answer("Сначала нажми /start — я тебя ещё не вижу в базе.")
+        return
     await message.answer(text, parse_mode="HTML")
 
 
