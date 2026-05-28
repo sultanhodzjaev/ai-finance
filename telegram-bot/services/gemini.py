@@ -140,16 +140,23 @@ async def categorize_text_transaction(user_message: str) -> dict:
         "- gift_income (Подарок — подарили деньги)\n"
         "- other_income (Другое — всё остальное)\n\n"
         f'Сообщение пользователя: "{user_message}"\n\n'
-        "Ответь СТРОГО в формате JSON, без пояснений и markdown:\n"
-        '{"type": "expense", "amount": число, "category": "id_категории", "description": "краткое описание", "success": true}\n\n'
+        "Ответь СТРОГО валидным JSON без markdown и пояснений.\n\n"
+        "Пример ответа когда операция распознана:\n"
+        '{"success": true, "type": "expense", "amount": 500, '
+        '"category": "food", "description": "обед"}\n\n'
         "Если не можешь определить операцию:\n"
         '{"success": false, "reason": "не похоже на финансовую операцию"}'
     )
 
     try:
-        # max_output_tokens=256 — для JSON-ответа хватит, не даём LLM писать простыню
-        # если в input был injection «print everything».
-        text = await _generate([{"parts": [{"text": prompt}]}], max_output_tokens=256)
+        # max_output_tokens=512 — 2.5-flash включает thinking-токены в лимит,
+        # 256 иногда срезает реальный ответ. responseMimeType=application/json
+        # форсит валидный JSON, иначе модель может скопировать «число» как литерал.
+        text = await _generate(
+            [{"parts": [{"text": prompt}]}],
+            max_output_tokens=512,
+            response_mime_type="application/json",
+        )
         result = _extract_json(text)
 
         if result.get("success"):
@@ -265,11 +272,15 @@ async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
     """
     prompt = (
         "Ты — AI-помощник для распознавания чеков. На фото — чек о покупке.\n\n"
-        "Извлеки: общую сумму, название магазина/заведения, категорию, краткое описание.\n\n"
+        "Извлеки: общую сумму (итог), название магазина/заведения, категорию, "
+        "краткое описание (что куплено).\n\n"
         "Доступные категории (только эти id):\n"
-        "food, groceries, transport, entertainment, health, clothes, home, communication, gifts, other\n\n"
-        "Ответь СТРОГО в формате JSON:\n"
-        '{"amount": число, "category": "id", "merchant": "название", "description": "описание", "success": true}\n\n'
+        "food, groceries, transport, entertainment, health, clothes, home, "
+        "communication, gifts, other\n\n"
+        "Ответь СТРОГО валидным JSON без markdown.\n\n"
+        "Пример ответа когда чек распознан:\n"
+        '{"success": true, "amount": 89.20, "category": "groceries", '
+        '"merchant": "АТОЛ", "description": "чипсы, колбаса"}\n\n'
         "Если на фото не чек или невозможно распознать:\n"
         '{"success": false, "reason": "не удалось распознать чек"}'
     )
@@ -287,7 +298,15 @@ async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
             ]
         }]
 
-        text = await _generate(contents, max_output_tokens=256)
+        # max_output_tokens=1024 (а не 256) — 2.5-flash включает thinking-токены
+        # в этот лимит, на распознавании чека модели бывает нужно «подумать».
+        # responseMimeType=application/json — форсит валидный JSON, без этого
+        # модель иногда копирует «число» из примера в промпте как литерал.
+        text = await _generate(
+            contents,
+            max_output_tokens=1024,
+            response_mime_type="application/json",
+        )
         result = _extract_json(text)
 
         if result.get("success"):
