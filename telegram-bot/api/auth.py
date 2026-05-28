@@ -3,9 +3,16 @@ import hmac
 import json
 import logging
 import os
+import time
 from urllib.parse import parse_qsl
 
 logger = logging.getLogger(__name__)
+
+# initData считается свежим если auth_date не старше N секунд. Стандарт Telegram
+# для server-side валидации — отбрасывать старый initData, чтобы украденный
+# токен нельзя было бесконечно реюзать. 5 минут — баланс между UX (юзер пробыл
+# в Mini App долго и реоткрыл) и безопасностью.
+INIT_DATA_MAX_AGE_SECONDS = 5 * 60
 
 
 def _bot_token() -> str:
@@ -53,6 +60,28 @@ def validate_init_data(init_data: str) -> dict | None:
                 "validate_init_data: хэш не совпадает. "
                 f"expected={expected_hash[:12]}… received={received_hash[:12]}…"
             )
+            return None
+
+        # Защита от replay: даже валидный initData мы не принимаем если он старее
+        # INIT_DATA_MAX_AGE_SECONDS — иначе кто-то с однажды утёкшим токеном мог
+        # бы вечно дёргать наш API под видом юзера.
+        auth_date_str = parsed.get("auth_date")
+        if auth_date_str:
+            try:
+                auth_ts = int(auth_date_str)
+                age = int(time.time()) - auth_ts
+                if age > INIT_DATA_MAX_AGE_SECONDS:
+                    logger.warning(
+                        "validate_init_data: initData устарел (auth_date age=%ds > %ds)",
+                        age, INIT_DATA_MAX_AGE_SECONDS,
+                    )
+                    return None
+            except (TypeError, ValueError):
+                logger.warning("validate_init_data: невалидный auth_date=%r", auth_date_str)
+                return None
+        else:
+            # Без auth_date нельзя определить свежесть — отказ безопаснее.
+            logger.warning("validate_init_data: нет поля auth_date")
             return None
 
         user_str = parsed.get("user")
