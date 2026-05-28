@@ -330,13 +330,13 @@ function buildNav() {
                            ${p ? 'text-indigo-600' : 'text-gray-400'}" data-screen="plan">
                 ${icon('crown', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">План</span>
             </button>
-            <button class="nav-btn absolute left-1/2 -translate-x-1/2 -top-7"
+            <button class="nav-btn absolute left-1/2 -translate-x-1/2 -top-4"
                     data-screen="add" aria-label="Добавить трату или доход"
-                    style="filter:drop-shadow(0 6px 14px rgba(99,102,241,0.45))">
-                <span class="rounded-full w-16 h-16 flex items-center justify-center text-white
-                             ring-4 ring-white dark:ring-[#0b0b14] active:scale-95 transition-transform"
+                    style="filter:drop-shadow(0 8px 20px rgba(99,102,241,0.50))">
+                <span class="rounded-full w-14 h-14 flex items-center justify-center text-white
+                             active:scale-95 transition-transform"
                       style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
-                    ${icon('plus', 'w-7 h-7')}
+                    ${icon('plus', 'w-6 h-6')}
                 </span>
             </button>
         </nav>`;
