@@ -1563,7 +1563,6 @@ function buildSettings() {
             <p class="eyebrow mb-2 mt-5">Управление</p>
             <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
                  style="background:var(--surface);border:1px solid var(--border)">
-                ${row('target', 'Бюджеты по категориям',  '', null, 'скоро')}
                 ${row('tags',   'Кастомные категории',     '', 'settings_categories')}
                 ${row('repeat', 'Регулярные платежи',      '', 'settings_recurring')}
             </div>
