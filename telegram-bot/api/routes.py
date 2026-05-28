@@ -82,6 +82,124 @@ async def update_currency(payload: dict, x_init_data: str = Header(...)):
     return {"ok": True, "currency": code}
 
 
+# ---------- Кастомные категории ----------
+
+@router.get("/me/categories")
+async def list_my_categories(x_init_data: str = Header(...)):
+    from services.storage import get_custom_categories
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    return {"categories": get_custom_categories(telegram_id)}
+
+
+@router.post("/me/categories")
+async def create_my_category(payload: dict, x_init_data: str = Header(...)):
+    from services.storage import add_custom_category, count_custom_categories, log_event
+    from services import plans
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+
+    name = (payload.get("name") or "").strip()
+    emoji = (payload.get("emoji") or "📦").strip()
+    type_ = (payload.get("type") or "expense").lower()
+    if not name or len(name) > 50:
+        raise HTTPException(status_code=400, detail="name must be 1..50 chars")
+    if type_ not in ("expense", "income"):
+        raise HTTPException(status_code=400, detail="type must be expense|income")
+
+    plan = plans.effective_plan(user)
+    cap = plans.LIMITS.get(plan, {}).get("categories_max") or 0
+    have = count_custom_categories(telegram_id)
+    if cap and have >= cap:
+        log_event(telegram_id, "limit_hit", {"action": "category_create", "used": have, "limit": cap})
+        raise HTTPException(status_code=402, detail=f"limit reached ({have}/{cap})")
+
+    cat = add_custom_category(telegram_id, name, emoji, type_)
+    if not cat:
+        raise HTTPException(status_code=500, detail="failed to create")
+    return {"category": cat}
+
+
+@router.delete("/me/categories/{cat_id}")
+async def delete_my_category(cat_id: str, x_init_data: str = Header(...)):
+    from services.storage import delete_custom_category
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    ok = delete_custom_category(telegram_id, cat_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
+# ---------- Регулярные платежи ----------
+
+@router.get("/recurring")
+async def list_recurring(x_init_data: str = Header(...)):
+    from services.storage import get_recurring_payments
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    return {"recurring": get_recurring_payments(telegram_id, only_active=True)}
+
+
+@router.post("/recurring")
+async def create_recurring(payload: dict, x_init_data: str = Header(...)):
+    from datetime import datetime as dt, timezone, timedelta
+    from services.storage import add_recurring_payment, count_recurring_payments, log_event
+    from services import plans
+    from utils.categories import get_category_by_id
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+
+    try:
+        amount = float(payload.get("amount"))
+        if amount <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="amount must be positive number")
+    type_ = (payload.get("type") or "").lower()
+    if type_ not in ("expense", "income"):
+        raise HTTPException(status_code=400, detail="type must be expense|income")
+    category = (payload.get("category") or "").strip()
+    if not category:
+        raise HTTPException(status_code=400, detail="category required")
+    # Категория может быть и стандартной (food/transport/…) и кастомной (UUID).
+    # Стандартные валидируем через get_category_by_id, кастомные — допускаем как есть.
+    try:
+        period_days = int(payload.get("period_days") or 30)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="period_days must be int")
+    if not 1 <= period_days <= 365:
+        raise HTTPException(status_code=400, detail="period_days must be 1..365")
+    description = (payload.get("description") or "").strip()[:200]
+
+    plan = plans.effective_plan(user)
+    cap = plans.LIMITS.get(plan, {}).get("recurring_payments_max") or 0
+    have = count_recurring_payments(telegram_id)
+    if cap and have >= cap:
+        log_event(telegram_id, "limit_hit", {"action": "recurring_create", "used": have, "limit": cap})
+        raise HTTPException(status_code=402, detail=f"limit reached ({have}/{cap})")
+
+    first_run = dt.now(timezone.utc) + timedelta(days=period_days)
+    rp = add_recurring_payment(
+        telegram_id, type_=type_, amount=amount, category=category,
+        description=description, period_days=period_days, first_run_at=first_run,
+    )
+    if not rp:
+        raise HTTPException(status_code=500, detail="failed to create")
+    return {"recurring": rp}
+
+
+@router.delete("/recurring/{rp_id}")
+async def delete_recurring(rp_id: str, x_init_data: str = Header(...)):
+    from services.storage import delete_recurring_payment
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    ok = delete_recurring_payment(telegram_id, rp_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
 @router.get("/me/invite")
 async def get_invite(x_init_data: str = Header(...)):
     """Реферальная ссылка юзера + счётчик приглашённых."""

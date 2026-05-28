@@ -323,6 +323,8 @@ function render() {
             ${state.screen === 'settings'  ? buildSettings()  : ''}
             ${state.screen === 'invite'    ? buildInvite()    : ''}
             ${state.screen === 'help'      ? buildHelp()      : ''}
+            ${state.screen === 'categories'? buildCategories(): ''}
+            ${state.screen === 'recurring' ? buildRecurring() : ''}
         </div>
         ${buildNav()}
         ${buildBottomSheet()}
@@ -344,6 +346,8 @@ function render() {
     if (state.screen === 'settings')  attachSettingsHandlers();
     if (state.screen === 'invite')    attachInviteHandlers();
     if (state.screen === 'help')      attachHelpHandlers();
+    if (state.screen === 'categories'){ attachCategoriesHandlers(); if (state.catFormOpen) attachCategoryFormHandlers(); }
+    if (state.screen === 'recurring') { attachRecurringHandlers();  if (state.recFormOpen) attachRecurringFormHandlers(); }
     if (state.currencyPickerOpen)     attachCurrencyPickerHandlers();
     if (state.selectedTx)             attachSheetHandlers();
     syncBackButton();
@@ -356,7 +360,7 @@ function buildNav() {
     const d = state.screen === 'dashboard',
           h = state.screen === 'history',
           p = state.screen === 'plan' || state.screen === 'upgrade';
-    const s = state.screen === 'settings' || state.screen === 'invite' || state.screen === 'help';
+    const s = ['settings','invite','help','categories','recurring'].includes(state.screen);
     // 5-колоночная raскладка: 2 кнопки слева, FAB в центре (3-й колонке), 2 справа.
     // grid grid-cols-5 даёт идеальное симметричное распределение — каждая колонка
     // ровно 20% ширины, центр nav совпадает с центром col 3 (где FAB).
@@ -1559,9 +1563,9 @@ function buildSettings() {
             <p class="eyebrow mb-2 mt-5">Управление</p>
             <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
                  style="background:var(--surface);border:1px solid var(--border)">
-                ${row('target',           'Бюджеты по категориям',  '', null, 'скоро')}
-                ${row('tags',             'Кастомные категории',     '', null, 'скоро')}
-                ${row('repeat',           'Регулярные платежи',      '', null, 'скоро')}
+                ${row('target', 'Бюджеты по категориям',  '', null, 'скоро')}
+                ${row('tags',   'Кастомные категории',     '', 'settings_categories')}
+                ${row('repeat', 'Регулярные платежи',      '', 'settings_recurring')}
             </div>
 
             <p class="eyebrow mb-2 mt-5">Прочее</p>
@@ -1580,10 +1584,12 @@ function attachSettingsHandlers() {
     document.querySelectorAll('[data-action]').forEach(el => {
         el.addEventListener('click', () => {
             const action = el.dataset.action;
-            if (action === 'settings_plan')          { goTo('plan'); }
-            else if (action === 'settings_currency') { openCurrencyPicker(); }
-            else if (action === 'settings_invite')   { goTo('invite'); }
-            else if (action === 'settings_help')     { goTo('help'); }
+            if (action === 'settings_plan')           { goTo('plan'); }
+            else if (action === 'settings_currency')  { openCurrencyPicker(); }
+            else if (action === 'settings_invite')    { goTo('invite'); }
+            else if (action === 'settings_help')      { goTo('help'); }
+            else if (action === 'settings_categories'){ state.customCategories = null; goTo('categories'); }
+            else if (action === 'settings_recurring') { state.recurringList = null; goTo('recurring'); }
         });
     });
 }
@@ -1786,6 +1792,447 @@ function buildHelp() {
 function attachHelpHandlers() {
     document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
         el.addEventListener('click', () => goBack()));
+}
+
+
+// ============================================================
+// ЭКРАН: КАСТОМНЫЕ КАТЕГОРИИ
+// ============================================================
+const EMOJI_CHOICES = ['🛒','🍔','🚗','🏠','💊','🎬','🎓','🐶','💰','✈️','📱','📌','💡','🎁','📦','💼','💻','📈','📊'];
+
+function buildCategories() {
+    if (state.customCategories === null || state.customCategories === undefined) {
+        (async () => {
+            try {
+                const res = await api('GET', '/me/categories');
+                state.customCategories = res.categories || [];
+                render();
+            } catch (e) { state.customCategories = []; render(); }
+        })();
+        return `<div class="px-4 pt-6 text-gray-500">Загружаю...</div>`;
+    }
+
+    const cats = state.customCategories;
+    const empty = !cats.length;
+    return `
+        <div class="px-4 pt-5 pb-6">
+            <h1 class="h-display mb-2">Кастомные категории</h1>
+            <p class="text-[13px] mb-5" style="color:var(--text-muted)">
+                Свои категории показываются в Mini App-дашборде и графиках. В чат-боте при
+                записи трат используется основной набор — для совместимости с AI.
+            </p>
+
+            ${empty ? `
+                <div class="rounded-2xl p-6 text-center" style="background:var(--surface);border:1px solid var(--border)">
+                    <p class="text-[15px] mb-1" style="color:var(--text)">Пока нет своих категорий</p>
+                    <p class="text-[13px]" style="color:var(--text-muted)">Создай первую — она появится в графиках Mini App.</p>
+                </div>
+            ` : `
+                <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
+                     style="background:var(--surface);border:1px solid var(--border)">
+                    ${cats.map(c => `
+                        <div class="flex items-center gap-3 px-4 py-3">
+                            <span class="text-xl">${c.emoji || '📦'}</span>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-[14px] font-medium truncate" style="color:var(--text)">${c.name}</p>
+                                <p class="text-[11px]" style="color:var(--text-faint)">${c.type === 'income' ? 'Доход' : 'Расход'}</p>
+                            </div>
+                            <button class="cat-delete-btn p-2 rounded-lg" data-cat-id="${c.id}"
+                                    style="color:var(--negative);background:rgba(244,63,94,0.08)">
+                                ${icon('trash-2', 'w-4 h-4')}
+                            </button>
+                        </div>
+                    `).join('')}
+                </div>
+            `}
+
+            <button id="cat-add-btn"
+                    class="fixed right-4 bottom-24 px-5 py-3 rounded-full text-white font-semibold text-[14px]
+                           flex items-center gap-2 active:scale-95 transition"
+                    style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%);
+                           filter:drop-shadow(0 6px 16px rgba(99,102,241,0.40))">
+                ${icon('plus', 'w-4 h-4')} Добавить категорию
+            </button>
+        </div>
+        ${state.catFormOpen ? buildCategoryForm() : ''}`;
+}
+
+function buildCategoryForm() {
+    const f = state.catForm || { name: '', emoji: '📦', type: 'expense' };
+    return `
+        <div class="fixed inset-0 z-50 flex items-end justify-center" style="background:rgba(0,0,0,0.5)" id="cat-form-overlay">
+            <div class="w-full max-w-md rounded-t-3xl pb-6 pt-3 px-4 sheet-enter"
+                 style="background:var(--surface)" onclick="event.stopPropagation()">
+                <div class="w-12 h-1 rounded-full mx-auto mb-4" style="background:var(--border)"></div>
+                <h3 class="text-base font-semibold mb-4" style="color:var(--text)">Новая категория</h3>
+
+                <label class="block">
+                    <span class="eyebrow">Название</span>
+                    <input id="cat-form-name" type="text" value="${f.name}" maxlength="50"
+                           placeholder="Корм для собаки"
+                           class="w-full mt-1.5 px-3 py-2.5 rounded-xl text-[15px]"
+                           style="background:var(--bg);color:var(--text);border:1px solid var(--border)">
+                </label>
+
+                <div class="mt-4">
+                    <span class="eyebrow">Эмодзи</span>
+                    <div class="grid grid-cols-8 gap-1.5 mt-1.5">
+                        ${EMOJI_CHOICES.map(e => `
+                            <button class="cat-emoji-btn aspect-square rounded-lg text-xl flex items-center justify-center
+                                            ${f.emoji === e ? 'ring-2' : ''}"
+                                    data-emoji="${e}"
+                                    style="background:${f.emoji === e ? 'var(--accent-soft)' : 'var(--bg)'};
+                                           ${f.emoji === e ? 'border:1px solid var(--accent)' : ''}">${e}</button>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <span class="eyebrow">Тип</span>
+                    <div class="grid grid-cols-2 gap-2 mt-1.5">
+                        <button class="cat-type-btn py-2.5 rounded-xl text-[14px] font-medium"
+                                data-type="expense"
+                                style="background:${f.type === 'expense' ? 'var(--accent-soft)' : 'var(--bg)'};
+                                       color:${f.type === 'expense' ? 'var(--accent)' : 'var(--text-muted)'};
+                                       border:1px solid ${f.type === 'expense' ? 'var(--accent)' : 'var(--border)'}">
+                            💸 Расход
+                        </button>
+                        <button class="cat-type-btn py-2.5 rounded-xl text-[14px] font-medium"
+                                data-type="income"
+                                style="background:${f.type === 'income' ? 'var(--accent-soft)' : 'var(--bg)'};
+                                       color:${f.type === 'income' ? 'var(--accent)' : 'var(--text-muted)'};
+                                       border:1px solid ${f.type === 'income' ? 'var(--accent)' : 'var(--border)'}">
+                            💰 Доход
+                        </button>
+                    </div>
+                </div>
+
+                <button id="cat-form-submit"
+                        class="w-full mt-5 py-3 rounded-xl text-white font-semibold"
+                        style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                    Создать
+                </button>
+            </div>
+        </div>`;
+}
+
+function attachCategoriesHandlers() {
+    document.getElementById('cat-add-btn')?.addEventListener('click', () => {
+        state.catForm = { name: '', emoji: '📦', type: 'expense' };
+        state.catFormOpen = true;
+        render();
+    });
+    document.querySelectorAll('.cat-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.catId;
+            const tg = window.Telegram?.WebApp;
+            const confirm = (msg) => new Promise(res => {
+                if (tg?.showConfirm) tg.showConfirm(msg, ok => res(ok));
+                else res(window.confirm(msg));
+            });
+            if (!await confirm('Удалить категорию?')) return;
+            try {
+                await api('DELETE', `/me/categories/${id}`);
+                state.customCategories = state.customCategories.filter(c => c.id !== id);
+                render();
+                tg?.HapticFeedback?.notificationOccurred?.('success');
+            } catch (e) {
+                if (tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
+            }
+        });
+    });
+}
+
+function attachCategoryFormHandlers() {
+    document.getElementById('cat-form-overlay')?.addEventListener('click', () => {
+        state.catFormOpen = false; render();
+    });
+    document.getElementById('cat-form-name')?.addEventListener('input', (e) => {
+        state.catForm.name = e.target.value;
+    });
+    document.querySelectorAll('.cat-emoji-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            state.catForm.emoji = b.dataset.emoji; render();
+        }));
+    document.querySelectorAll('.cat-type-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            state.catForm.type = b.dataset.type; render();
+        }));
+    document.getElementById('cat-form-submit')?.addEventListener('click', async () => {
+        const f = state.catForm;
+        if (!f.name || !f.name.trim()) {
+            const tg = window.Telegram?.WebApp;
+            if (tg?.showAlert) tg.showAlert('Заполни название');
+            return;
+        }
+        try {
+            const res = await api('POST', '/me/categories', {
+                name: f.name.trim(), emoji: f.emoji, type: f.type,
+            });
+            state.customCategories = [...(state.customCategories || []), res.category];
+            state.catFormOpen = false;
+            render();
+            const tg = window.Telegram?.WebApp;
+            tg?.HapticFeedback?.notificationOccurred?.('success');
+        } catch (e) {
+            const tg = window.Telegram?.WebApp;
+            if (tg?.showAlert) tg.showAlert(`Не удалось создать: ${e.message}`);
+        }
+    });
+}
+
+
+// ============================================================
+// ЭКРАН: РЕГУЛЯРНЫЕ ПЛАТЕЖИ
+// ============================================================
+function buildRecurring() {
+    if (state.recurringList === null || state.recurringList === undefined) {
+        (async () => {
+            try {
+                const res = await api('GET', '/recurring');
+                state.recurringList = res.recurring || [];
+                render();
+            } catch (e) { state.recurringList = []; render(); }
+        })();
+        return `<div class="px-4 pt-6 text-gray-500">Загружаю...</div>`;
+    }
+
+    const rps = state.recurringList;
+    const empty = !rps.length;
+    const currency = state.me?.currency || 'KGS';
+
+    return `
+        <div class="px-4 pt-5 pb-6">
+            <h1 class="h-display mb-2">Регулярные платежи</h1>
+            <p class="text-[13px] mb-5" style="color:var(--text-muted)">
+                Подписки, аренда, зарплата — то, что повторяется. Я сам создам транзакцию
+                когда подойдёт дата.
+            </p>
+
+            ${empty ? `
+                <div class="rounded-2xl p-6 text-center" style="background:var(--surface);border:1px solid var(--border)">
+                    <p class="text-[15px] mb-1" style="color:var(--text)">Пока нет регулярных</p>
+                    <p class="text-[13px]" style="color:var(--text-muted)">Добавь — и я буду записывать автоматически.</p>
+                </div>
+            ` : `
+                <div class="space-y-2">
+                    ${rps.map(r => {
+                        const cat = findCategoryById(r.category);
+                        const sign = r.type === 'income' ? '+' : '−';
+                        const colour = r.type === 'income' ? 'var(--positive)' : 'var(--text)';
+                        return `
+                        <div class="rounded-2xl p-4 flex items-center gap-3"
+                             style="background:var(--surface);border:1px solid var(--border)">
+                            <span class="text-xl flex-shrink-0">${cat.emoji}</span>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-[14px] font-semibold truncate" style="color:var(--text)">
+                                    ${r.description || cat.name}
+                                </p>
+                                <p class="text-[11px]" style="color:var(--text-faint)">
+                                    Каждые ${r.period_days} дн · следующая ${(r.next_run_at || '').slice(0,10)}
+                                </p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-[14px] font-bold" style="color:${colour}">
+                                    ${sign}${fmt(r.amount)}
+                                </p>
+                                <button class="rec-delete-btn text-[11px] mt-1"
+                                        data-rec-id="${r.id}" style="color:var(--negative)">
+                                    Удалить
+                                </button>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            `}
+
+            <button id="rec-add-btn"
+                    class="fixed right-4 bottom-24 px-5 py-3 rounded-full text-white font-semibold text-[14px]
+                           flex items-center gap-2 active:scale-95 transition"
+                    style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%);
+                           filter:drop-shadow(0 6px 16px rgba(99,102,241,0.40))">
+                ${icon('plus', 'w-4 h-4')} Добавить регулярный
+            </button>
+        </div>
+        ${state.recFormOpen ? buildRecurringForm() : ''}`;
+}
+
+function findCategoryById(id) {
+    const all = [
+        ...(state.expenseCategories || []),
+        ...(state.incomeCategories || []),
+        ...((state.customCategories || []).map(c => ({ id: c.id, name: c.name, emoji: c.emoji }))),
+    ];
+    return all.find(c => c.id === id) || { id, name: id, emoji: '📦' };
+}
+
+function buildRecurringForm() {
+    const f = state.recForm || { amount: '', type: 'expense', category: '', period_days: 30, description: '' };
+    const cats = f.type === 'expense' ? (state.expenseCategories || []) : (state.incomeCategories || []);
+    const periods = [
+        { d: 7,  label: '7 дн' },
+        { d: 14, label: '14 дн' },
+        { d: 30, label: 'Месяц' },
+        { d: 90, label: 'Квартал' },
+    ];
+    return `
+        <div class="fixed inset-0 z-50 flex items-end justify-center" style="background:rgba(0,0,0,0.5)" id="rec-form-overlay">
+            <div class="w-full max-w-md rounded-t-3xl pb-6 pt-3 px-4 sheet-enter max-h-[85vh] overflow-y-auto"
+                 style="background:var(--surface)" onclick="event.stopPropagation()">
+                <div class="w-12 h-1 rounded-full mx-auto mb-4" style="background:var(--border)"></div>
+                <h3 class="text-base font-semibold mb-4" style="color:var(--text)">Новый регулярный платёж</h3>
+
+                <label class="block">
+                    <span class="eyebrow">Сумма</span>
+                    <input id="rec-form-amount" type="number" inputmode="decimal" value="${f.amount}"
+                           placeholder="8750"
+                           class="w-full mt-1.5 px-3 py-2.5 rounded-xl text-[15px]"
+                           style="background:var(--bg);color:var(--text);border:1px solid var(--border)">
+                </label>
+
+                <div class="mt-4">
+                    <span class="eyebrow">Тип</span>
+                    <div class="grid grid-cols-2 gap-2 mt-1.5">
+                        <button class="rec-type-btn py-2.5 rounded-xl text-[14px] font-medium"
+                                data-type="expense"
+                                style="background:${f.type === 'expense' ? 'var(--accent-soft)' : 'var(--bg)'};
+                                       color:${f.type === 'expense' ? 'var(--accent)' : 'var(--text-muted)'};
+                                       border:1px solid ${f.type === 'expense' ? 'var(--accent)' : 'var(--border)'}">
+                            💸 Расход
+                        </button>
+                        <button class="rec-type-btn py-2.5 rounded-xl text-[14px] font-medium"
+                                data-type="income"
+                                style="background:${f.type === 'income' ? 'var(--accent-soft)' : 'var(--bg)'};
+                                       color:${f.type === 'income' ? 'var(--accent)' : 'var(--text-muted)'};
+                                       border:1px solid ${f.type === 'income' ? 'var(--accent)' : 'var(--border)'}">
+                            💰 Доход
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <span class="eyebrow">Категория</span>
+                    <div class="grid grid-cols-2 gap-1.5 mt-1.5">
+                        ${cats.map(c => `
+                            <button class="rec-cat-btn flex items-center gap-2 px-3 py-2 rounded-xl text-[13px] text-left"
+                                    data-cat-id="${c.id}"
+                                    style="background:${f.category === c.id ? 'var(--accent-soft)' : 'var(--bg)'};
+                                           color:${f.category === c.id ? 'var(--accent)' : 'var(--text)'};
+                                           border:1px solid ${f.category === c.id ? 'var(--accent)' : 'var(--border)'}">
+                                <span>${c.emoji}</span><span class="truncate">${c.name}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <span class="eyebrow">Период</span>
+                    <div class="grid grid-cols-4 gap-2 mt-1.5">
+                        ${periods.map(p => `
+                            <button class="rec-period-btn py-2 rounded-xl text-[13px] font-medium"
+                                    data-days="${p.d}"
+                                    style="background:${f.period_days === p.d ? 'var(--accent-soft)' : 'var(--bg)'};
+                                           color:${f.period_days === p.d ? 'var(--accent)' : 'var(--text-muted)'};
+                                           border:1px solid ${f.period_days === p.d ? 'var(--accent)' : 'var(--border)'}">
+                                ${p.label}
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <label class="block mt-4">
+                    <span class="eyebrow">Описание (опционально)</span>
+                    <input id="rec-form-desc" type="text" value="${f.description}" maxlength="200"
+                           placeholder="Spotify"
+                           class="w-full mt-1.5 px-3 py-2.5 rounded-xl text-[15px]"
+                           style="background:var(--bg);color:var(--text);border:1px solid var(--border)">
+                </label>
+
+                <button id="rec-form-submit"
+                        class="w-full mt-5 py-3 rounded-xl text-white font-semibold"
+                        style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                    Создать
+                </button>
+            </div>
+        </div>`;
+}
+
+function attachRecurringHandlers() {
+    document.getElementById('rec-add-btn')?.addEventListener('click', () => {
+        state.recForm = { amount: '', type: 'expense', category: '', period_days: 30, description: '' };
+        state.recFormOpen = true;
+        render();
+    });
+    document.querySelectorAll('.rec-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.recId;
+            const tg = window.Telegram?.WebApp;
+            const confirm = (msg) => new Promise(res => {
+                if (tg?.showConfirm) tg.showConfirm(msg, ok => res(ok));
+                else res(window.confirm(msg));
+            });
+            if (!await confirm('Удалить регулярный платёж?')) return;
+            try {
+                await api('DELETE', `/recurring/${id}`);
+                state.recurringList = state.recurringList.filter(r => r.id !== id);
+                render();
+                tg?.HapticFeedback?.notificationOccurred?.('success');
+            } catch (e) {
+                if (tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
+            }
+        });
+    });
+}
+
+function attachRecurringFormHandlers() {
+    document.getElementById('rec-form-overlay')?.addEventListener('click', () => {
+        state.recFormOpen = false; render();
+    });
+    document.getElementById('rec-form-amount')?.addEventListener('input', (e) => {
+        state.recForm.amount = e.target.value;
+    });
+    document.getElementById('rec-form-desc')?.addEventListener('input', (e) => {
+        state.recForm.description = e.target.value;
+    });
+    document.querySelectorAll('.rec-type-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            // при смене типа сбрасываем выбранную категорию (другой список)
+            state.recForm.type = b.dataset.type;
+            state.recForm.category = '';
+            render();
+        }));
+    document.querySelectorAll('.rec-cat-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            state.recForm.category = b.dataset.catId; render();
+        }));
+    document.querySelectorAll('.rec-period-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            state.recForm.period_days = parseInt(b.dataset.days, 10); render();
+        }));
+    document.getElementById('rec-form-submit')?.addEventListener('click', async () => {
+        const f = state.recForm;
+        const tg = window.Telegram?.WebApp;
+        const amount = parseFloat(f.amount);
+        if (!amount || amount <= 0) { tg?.showAlert?.('Введи сумму'); return; }
+        if (!f.category) { tg?.showAlert?.('Выбери категорию'); return; }
+        try {
+            const res = await api('POST', '/recurring', {
+                amount, type: f.type, category: f.category,
+                period_days: f.period_days, description: f.description,
+            });
+            state.recurringList = [...(state.recurringList || []), res.recurring];
+            state.recFormOpen = false;
+            render();
+            tg?.HapticFeedback?.notificationOccurred?.('success');
+        } catch (e) {
+            tg?.showAlert?.(`Не удалось создать: ${e.message}`);
+        }
+    });
 }
 
 
