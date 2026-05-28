@@ -3,7 +3,7 @@ from datetime import datetime, date
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from services import plans, storage
 from utils.categories import get_category, get_category_by_id
@@ -20,6 +20,20 @@ MONTH_NAMES_NOM = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 ]
+
+
+def _switch_today_kb() -> InlineKeyboardMarkup:
+    """Под /stats — переключение на /today."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📅 За сегодня", callback_data="show_today"),
+    ]])
+
+
+def _switch_month_kb() -> InlineKeyboardMarkup:
+    """Под /today — переключение на /stats."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📈 За месяц", callback_data="show_stats"),
+    ]])
 
 
 @router.message(Command("today"))
@@ -46,7 +60,10 @@ async def cmd_today(event: Message | CallbackQuery):
     ]
 
     if not today_txs:
-        await send("Сегодня ты ещё ничего не записал. Так держать или забыл записать? 😄")
+        await send(
+            "Сегодня ты ещё ничего не записал. Так держать или забыл записать? 😄",
+            reply_markup=_switch_month_kb(),
+        )
         return
 
     today_dt = datetime.today()
@@ -82,7 +99,7 @@ async def cmd_today(event: Message | CallbackQuery):
     emoji = "✅" if balance >= 0 else "⚠️"
     lines.append(f"{emoji} Остаток за день: {sign}{format_amount(balance, currency)}")
 
-    await send("\n".join(lines))
+    await send("\n".join(lines), reply_markup=_switch_month_kb())
 
 
 @router.message(Command("stats"))
@@ -109,7 +126,10 @@ async def cmd_stats(event: Message | CallbackQuery):
     ]
 
     if not month_txs:
-        await send(f"В {MONTH_NAMES_GEN[now.month - 1]} ты ещё ничего не записал.")
+        await send(
+            f"В {MONTH_NAMES_GEN[now.month - 1]} ты ещё ничего не записал.",
+            reply_markup=_switch_today_kb(),
+        )
         return
 
     incomes  = [t for t in month_txs if t.get("type") == "income"]
@@ -161,7 +181,7 @@ async def cmd_stats(event: Message | CallbackQuery):
         lines.append(f"📈 Среднее в день (расходы): {format_amount(avg_per_day, currency)}")
     lines.append(f"🔢 Транзакций: {len(month_txs)}")
 
-    await send("\n".join(lines))
+    await send("\n".join(lines), reply_markup=_switch_today_kb())
 
 
 # ---- helpers ----
