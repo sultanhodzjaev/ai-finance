@@ -1394,9 +1394,10 @@ function attachUpgradeHandlers() {
             try {
                 const { payment_url } = await api('POST', '/upgrade/invoice', { tier });
                 if (!payment_url) throw new Error('Пустая ссылка на оплату');
-                // Открываем платёжный виджет Лавы в браузере
-                if (tg?.openLink) tg.openLink(payment_url);
-                else window.open(payment_url, '_blank');
+                // Навигация в той же WebView — Лава грузится внутри Mini App,
+                // юзер не покидает Telegram. После оплаты webhook активирует
+                // подписку и бот пушнёт сообщение в чат.
+                window.location.href = payment_url;
             } catch (e) {
                 if (tg?.showAlert) tg.showAlert(`Не удалось создать счёт: ${e.message}`);
                 else alert(`Ошибка: ${e.message}`);
