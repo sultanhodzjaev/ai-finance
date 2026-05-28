@@ -65,11 +65,11 @@ def _used_for(action: str, telegram_id: int) -> int:
 def _upgrade_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"💎 Premium — {plans.PRICE_STARS[plans.PLAN_PREMIUM]}⭐",
+            text=f"💎 Premium — ${plans.PRICE_USD[plans.PLAN_PREMIUM]}/мес",
             callback_data="upgrade_premium",
         )],
         [InlineKeyboardButton(
-            text=f"🚀 Pro — {plans.PRICE_STARS[plans.PLAN_PRO]}⭐",
+            text=f"🚀 Pro — ${plans.PRICE_USD[plans.PLAN_PRO]}/мес",
             callback_data="upgrade_pro",
         )],
     ])
@@ -132,21 +132,21 @@ async def cmd_upgrade(message: Message):
     storage.log_event(message.from_user.id, "upgrade_clicked", {"source": "command"})
     await message.answer(
         "💳 <b>Подписка AI-Финансист</b>\n\n"
-        "💎 <b>Premium — 350⭐ ≈ $7 / мес</b>\n"
+        "💎 <b>Premium — $5 / мес</b>\n"
         "  • 17 трат / день (≈500/мес)\n"
         "  • 1 фото чек / день (≈30/мес)\n"
         "  • 300 вопросов финансисту / мес\n"
         "  • Голос: 60/мес\n"
         "  • История: 12 мес\n"
         "  • Импорт CSV и экспорт (3 в мес)\n\n"
-        "🚀 <b>Pro — 750⭐ ≈ $15 / мес</b>\n"
+        "🚀 <b>Pro — $10 / мес</b>\n"
         "  • 100 трат / день (≈3000/мес)\n"
         "  • 5 фото чеков / день (≈150/мес)\n"
         "  • 1500 вопросов финансисту / мес\n"
         "  • Голос: 200/мес\n"
         "  • История: 24 мес\n"
         "  • Экспорт (10 в мес), 100 категорий\n\n"
-        "💫 Оплата — в Telegram Stars. Подписка на 30 дней.",
+        "💳 Оплата картой через Lava.top. Подписка автопродлевается каждый месяц, можно отменить в любой момент.",
         parse_mode="HTML",
         reply_markup=_upgrade_keyboard(),
     )

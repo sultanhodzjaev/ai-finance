@@ -1321,8 +1321,8 @@ function buildUpgrade() {
                    Это твой текущий тариф
                </button>`
             : `<button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
-                       data-tier="${key}" data-stars="${price.stars}">
-                   Купить за ${price.stars}⭐
+                       data-tier="${key}">
+                   Оформить — $${price.usd}/мес
                </button>`;
         return `
             <div class="bg-white rounded-2xl p-5 shadow-sm ${ringClass} mb-3 relative">
@@ -1334,7 +1334,7 @@ function buildUpgrade() {
                         </div>
                         <div>
                             <p class="font-bold text-gray-900">${title}</p>
-                            <p class="text-xs text-gray-400">${price.stars}⭐ ≈ $${price.usd}/мес</p>
+                            <p class="text-xs text-gray-400">$${price.usd}/мес</p>
                         </div>
                     </div>
                 </div>
@@ -1373,7 +1373,7 @@ function buildUpgrade() {
             ], false)}
 
             <p class="text-xs text-gray-400 text-center mt-4">
-                Оплата через Telegram Stars. Подписка продлевается на 30 дней с момента покупки.
+                Оплата картой через Lava.top. Подписка продлевается автоматически каждый месяц, можно отменить в любой момент.
             </p>
         </div>`;
 }
@@ -1385,39 +1385,18 @@ function attachUpgradeHandlers() {
     });
     document.querySelectorAll('.upgrade-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
-            const tier  = btn.dataset.tier;
-            const stars = btn.dataset.stars;
-            const tierTitle = tier === 'pro' ? 'Pro' : 'Premium';
+            const tier = btn.dataset.tier;
 
             btn.disabled = true;
             const originalText = btn.textContent;
             btn.textContent = 'Подготавливаю оплату...';
 
             try {
-                const { invoice_link } = await api('POST', '/upgrade/invoice', { tier });
-
-                if (!tg?.openInvoice) {
-                    if (tg?.showAlert) tg.showAlert(
-                        'Открой Mini App через кнопку в боте — встроенная оплата работает только там.'
-                    );
-                    return;
-                }
-
-                tg.openInvoice(invoice_link, async (status) => {
-                    if (status === 'paid') {
-                        // Перезагружаем данные плана и переходим на экран /plan
-                        try {
-                            state.plan = await api('GET', '/plan');
-                        } catch {}
-                        state.screen = 'plan';
-                        render();
-                        if (tg?.showAlert) tg.showAlert(`Подписка ${tierTitle} активирована 🎉`);
-                    } else if (status === 'failed') {
-                        if (tg?.showAlert) tg.showAlert('Оплата не прошла. Попробуй ещё раз.');
-                    } else if (status === 'cancelled') {
-                        // Тихо — юзер закрыл диалог
-                    }
-                });
+                const { payment_url } = await api('POST', '/upgrade/invoice', { tier });
+                if (!payment_url) throw new Error('Пустая ссылка на оплату');
+                // Открываем платёжный виджет Лавы в браузере
+                if (tg?.openLink) tg.openLink(payment_url);
+                else window.open(payment_url, '_blank');
             } catch (e) {
                 if (tg?.showAlert) tg.showAlert(`Не удалось создать счёт: ${e.message}`);
                 else alert(`Ошибка: ${e.message}`);

@@ -90,15 +90,22 @@ LIMITS: dict[str, dict] = {
     },
 }
 
-# Цены в Telegram Stars (≈ $1 = 50⭐).
-PRICE_STARS = {
-    PLAN_PREMIUM: 350,   # $7
-    PLAN_PRO:     750,   # $15
+PRICE_USD = {
+    PLAN_PREMIUM: 5,
+    PLAN_PRO:     10,
 }
 
-PRICE_USD = {
-    PLAN_PREMIUM: 7,
-    PLAN_PRO:     15,
+# Lava.top offerId для каждого тарифа. Создано в кабинете Лавы как SUBSCRIPTION/MONTHLY.
+LAVA_OFFER_IDS = {
+    PLAN_PREMIUM: "df63e9a8-c8e3-4fc4-aaca-43b380e1d6fe",
+    PLAN_PRO:     "e48623e7-746d-4780-b28c-1759dc5b8559",
+}
+
+# Маппинг суммы в USD → тариф для разбора webhook'ов от Лавы.
+# Webhook не несёт offerId, но несёт amount; так дешевле и надёжнее, чем сравнивать сторонние title.
+USD_TO_PLAN = {
+    5:  PLAN_PREMIUM,
+    10: PLAN_PRO,
 }
 
 PLAN_TITLE = {

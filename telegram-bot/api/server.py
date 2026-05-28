@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.routes import router
+from api.webhooks import router as webhooks_router
 
 app = FastAPI(title="AI-финансист Mini App")
 
@@ -70,8 +71,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем API-роуты (/miniapp/api/*)
+# Подключаем API-роуты (/miniapp/api/*) и внешние webhook'и (/webhook/*)
 app.include_router(router)
+app.include_router(webhooks_router)
 
 # Раздаём фронтенд Mini App из папки webapp/ по пути /miniapp
 # Монтируем ПОСЛЕ роутов, чтобы /miniapp/api/* перехватывался роутами первым

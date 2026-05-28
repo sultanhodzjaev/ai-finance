@@ -40,6 +40,9 @@ async def run_bot():
         raise ValueError("BOT_TOKEN не найден. Добавь его в Secrets.")
 
     bot = Bot(token=bot_token)
+    # Прокидываем bot в FastAPI-app, чтобы webhook'и (например, /webhook/lava)
+    # могли слать пуш-сообщения юзерам.
+    fastapi_app.state.bot = bot
 
     # FSM-стейт переживает рестарт через Redis. Если REDIS_URL не задан или
     # подключение падает — фолбэк на MemoryStorage, чтобы прод не лёг.
@@ -57,8 +60,7 @@ async def run_bot():
     dp.message.middleware(BanAndFloodMiddleware())
 
     # Порядок роутеров важен: ai_advisor идёт до transactions;
-    # payments — отдельным роутером, чтобы pre_checkout_query и successful_payment
-    # обрабатывались первыми. admin — рано, чтобы /ban /unban /admin_stats не съел кто-то ниже.
+    # admin — рано, чтобы /ban /unban /admin_stats не съел кто-то ниже.
     dp.include_router(payments.router)
     dp.include_router(admin_handlers.router)
     dp.include_router(start.router)
