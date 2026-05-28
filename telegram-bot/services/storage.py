@@ -291,6 +291,28 @@ def log_event(telegram_id: int, event_type: str, metadata: dict | None = None) -
         logger.warning(f"log_event({telegram_id}, {event_type}): {e}")
 
 
+def has_lava_event_processed(contract_id: str, lava_event: str) -> bool:
+    """Уже обрабатывали этот webhook от Lava? Идемпотентность по (contract_id, event).
+    Lava при сетевых сбоях ретраит запросы; без проверки мы бы повторно дёрнули
+    activate_subscription и продлили подписку на лишние 30 дней (двойное списание UX).
+    Используем JSONB->>field фильтр PostgREST."""
+    if not contract_id:
+        return False
+    try:
+        res = (
+            _client().table("events").select("id")
+            .eq("type", "lava_processed")
+            .filter("metadata->>contract_id", "eq", str(contract_id))
+            .filter("metadata->>event", "eq", str(lava_event))
+            .limit(1).execute()
+        )
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"has_lava_event_processed({contract_id}, {lava_event}): {e}")
+        # На ошибке БД — лучше дать пройти один раз, чем заблокировать платёж навсегда.
+        return False
+
+
 def has_event_ever(telegram_id: int, event_type: str) -> bool:
     """Был ли у юзера хоть один event указанного типа за всё время.
     Используется для one-shot подсказок («показать ровно один раз»)."""
