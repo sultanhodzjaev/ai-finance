@@ -15,6 +15,7 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import BotCommand
 
 from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals, categories, recurring, onboarding
 from handlers import admin as admin_handlers
@@ -75,6 +76,23 @@ async def run_bot():
 
     # Фоновый шедулер (trial sweep + ежедневные напоминания)
     asyncio.create_task(scheduler_loop(bot))
+
+    # Список / команд, который TG показывает по нажатию синей кнопки «Menu».
+    # Намеренно короткий — основная навигация идёт через inline-кнопки /start,
+    # а /команды это запасной путь для тех кто привык к клавиатуре.
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start",   description="Главное меню"),
+            BotCommand(command="stats",   description="Статистика за месяц"),
+            BotCommand(command="ask",     description="Спросить AI-финансиста"),
+            BotCommand(command="plan",    description="Мой план и лимиты"),
+            BotCommand(command="upgrade", description="Поднять план"),
+            BotCommand(command="settings", description="Настройки"),
+            BotCommand(command="cancel",  description="Выйти из активного диалога"),
+            BotCommand(command="help",    description="Как пользоваться"),
+        ])
+    except Exception as e:
+        logger.warning(f"set_my_commands failed: {e}")
 
     logger.info("Telegram-бот запускается в режиме polling...")
     await dp.start_polling(bot)
