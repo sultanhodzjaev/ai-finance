@@ -5,6 +5,42 @@
 
 const tg = window.Telegram?.WebApp;
 
+
+// ----- Навигация: history stack + Telegram BackButton -----
+// goTo(screen) — push текущий в стек, переход на новый экран.
+// goTo(screen, {push:false}) — переход без push (для клика по navbar — стек чистится).
+// goBack() — pop из стека (или dashboard, если стек пустой).
+function goTo(screen, opts) {
+    if (!state.screenStack) state.screenStack = [];
+    const push = opts?.push !== false;
+    if (push && state.screen && state.screen !== screen) {
+        state.screenStack.push(state.screen);
+    } else if (!push) {
+        state.screenStack = [];
+    }
+    state.screen = screen;
+    render();
+}
+
+function goBack() {
+    if (!state.screenStack) state.screenStack = [];
+    const prev = state.screenStack.pop();
+    state.screen = prev || 'dashboard';
+    render();
+}
+
+let _backHandlerBound = false;
+function syncBackButton() {
+    const bb = tg?.BackButton;
+    if (!bb) return;
+    if (!_backHandlerBound) {
+        bb.onClick(() => goBack());
+        _backHandlerBound = true;
+    }
+    if ((state.screenStack || []).length > 0) bb.show();
+    else bb.hide();
+}
+
 if (tg) {
     tg.ready();
     tg.expand();
@@ -49,6 +85,8 @@ const state = {
     dashboardPeriod:  'month',   // 'day'|'week'|'month'|'year'|'custom'
     dashboardRange:   null,      // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } для custom
     rangePickerOpen:  false,
+    // Стек экранов для кнопки «Назад» (Telegram BackButton).
+    screenStack:      [],
 };
 
 // ============================================================
@@ -294,8 +332,7 @@ function render() {
     if (state.screen === 'dashboard') {
         renderCharts();
         document.getElementById('open-upgrade-from-dash')?.addEventListener('click', () => {
-            state.screen = 'plan';
-            render();
+            goTo('plan');
         });
         attachDashboardPeriodHandlers();
         if (state.rangePickerOpen) attachRangePickerHandlers();
@@ -309,6 +346,7 @@ function render() {
     if (state.screen === 'help')      attachHelpHandlers();
     if (state.currencyPickerOpen)     attachCurrencyPickerHandlers();
     if (state.selectedTx)             attachSheetHandlers();
+    syncBackButton();
 }
 
 // ============================================================
@@ -358,10 +396,12 @@ function buildNav() {
 function attachNavHandlers() {
     document.querySelectorAll('.nav-btn').forEach(btn =>
         btn.addEventListener('click', () => {
-            state.screen = btn.dataset.screen;
-            if (state.screen !== 'history') { state.periodFilter = 'month'; state.typeFilter = 'all'; }
+            const target = btn.dataset.screen;
+            if (target !== 'history') { state.periodFilter = 'month'; state.typeFilter = 'all'; }
             state.selectedTx = null; state.editingTx = false;
-            render();
+            // Клик по navbar — это корневая навигация, стек чистим.
+            goTo(target, { push: false });
+            return;
         })
     );
 }
@@ -957,9 +997,8 @@ function attachAddHandlers() {
                 type: state.addType, amount, category: addSelectedCat, description: desc,
             });
             state.transactions.unshift(tx);
-            state.screen = 'history';
             state.typeFilter = state.addType; // сразу показываем нужный фильтр
-            render();
+            goTo('history', { push: false });
         } catch (e) {
             if (tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
             else alert(`Ошибка: ${e.message}`);
@@ -1123,12 +1162,14 @@ const PLAN_VISUAL = {
     free:    { iconName: 'circle',   title: 'Free',    subtitle: 'Бесплатно навсегда' },
     premium: { iconName: 'gem',      title: 'Premium', subtitle: '$7 в месяц' },
     pro:     { iconName: 'crown',    title: 'Pro',     subtitle: '$15 в месяц' },
+    owner:   { iconName: 'crown',    title: 'Owner',   subtitle: 'Безлимитный доступ' },
 };
 
 function fmtPlanTimeLeft(planData) {
     if (!planData) return '';
     const target = planData.plan === 'trial' ? planData.trial_until : planData.subscription_until;
-    if (planData.plan === 'free') return 'Бесплатный режим';
+    if (planData.plan === 'free')  return 'Бесплатный режим';
+    if (planData.plan === 'owner') return 'Безлимит (allowlist)';
     if (!target) return 'Бессрочно';
     const t = new Date(target);
     const secs = (t - new Date()) / 1000;
@@ -1182,8 +1223,7 @@ function buildPlanWidget() {
 
 function attachPlanWidgetHandlers() {
     document.getElementById('plan-widget')?.addEventListener('click', () => {
-        state.screen = 'plan';
-        render();
+        goTo('plan');
     });
 }
 
@@ -1322,8 +1362,7 @@ function buildPlan() {
 
 function attachPlanHandlers() {
     document.getElementById('open-upgrade-btn')?.addEventListener('click', () => {
-        state.screen = 'upgrade';
-        render();
+        goTo('upgrade');
     });
 
     document.getElementById('export-csv-btn')?.addEventListener('click', async () => {
@@ -1450,8 +1489,7 @@ function buildUpgrade() {
 
 function attachUpgradeHandlers() {
     document.getElementById('back-to-plan')?.addEventListener('click', () => {
-        state.screen = 'plan';
-        render();
+        goBack();
     });
     document.querySelectorAll('.upgrade-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -1542,10 +1580,10 @@ function attachSettingsHandlers() {
     document.querySelectorAll('[data-action]').forEach(el => {
         el.addEventListener('click', () => {
             const action = el.dataset.action;
-            if (action === 'settings_plan')          { state.screen = 'plan';    render(); }
+            if (action === 'settings_plan')          { goTo('plan'); }
             else if (action === 'settings_currency') { openCurrencyPicker(); }
-            else if (action === 'settings_invite')   { state.screen = 'invite';  render(); }
-            else if (action === 'settings_help')     { state.screen = 'help';    render(); }
+            else if (action === 'settings_invite')   { goTo('invite'); }
+            else if (action === 'settings_help')     { goTo('help'); }
         });
     });
 }
@@ -1674,7 +1712,7 @@ function buildInvite() {
 
 function attachInviteHandlers() {
     document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
-        el.addEventListener('click', () => { state.screen = 'settings'; render(); }));
+        el.addEventListener('click', () => goBack()));
     document.querySelectorAll('[data-action="invite_copy"]').forEach(el =>
         el.addEventListener('click', async () => {
             const link = state.invite?.link;
@@ -1747,7 +1785,7 @@ function buildHelp() {
 
 function attachHelpHandlers() {
     document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
-        el.addEventListener('click', () => { state.screen = 'settings'; render(); }));
+        el.addEventListener('click', () => goBack()));
 }
 
 
