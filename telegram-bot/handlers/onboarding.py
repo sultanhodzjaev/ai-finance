@@ -5,6 +5,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardRemove,
 )
 
 from services import storage, plans
@@ -162,3 +163,44 @@ async def cb_show_subscription(callback: CallbackQuery):
     # Просто триггерим /plan-обработчик через bot.send_message — там вся логика
     await callback.message.answer("Открой /plan чтобы увидеть подробности и продлить подписку.")
     await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Legacy reply-keyboard fallback: если юзер всё ещё видит старую persistent-клаву
+# (текст «📊 План» / «📈 Статистика» / «🤖 AI-финансист» / «⚙️ Настройки»),
+# обрабатываем нажатие и одновременно стираем legacy-клавиатуру.
+# Можно удалить через 1-2 недели когда у всех старая клава пропадёт.
+# ---------------------------------------------------------------------------
+
+@router.message(F.text == "📊 План")
+async def legacy_plan(message: Message):
+    from handlers.plan import build_plan_text
+    text = build_plan_text(message.from_user.id)
+    if text is None:
+        await message.answer("Сначала нажми /start.", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Меню 👇", reply_markup=main_inline_kb())
+
+
+@router.message(F.text == "📈 Статистика")
+async def legacy_stats(message: Message):
+    from handlers.stats import cmd_stats
+    await message.answer("📈 Статистика 👇", reply_markup=ReplyKeyboardRemove())
+    await cmd_stats(message)
+
+
+@router.message(F.text == "🤖 AI-финансист")
+async def legacy_ai(message: Message):
+    await message.answer(
+        "🤖 Спроси меня о своих финансах. Например: «где я слил больше всего за неделю?»",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer("Меню 👇", reply_markup=main_inline_kb())
+
+
+@router.message(F.text == "⚙️ Настройки")
+async def legacy_settings(message: Message):
+    user = storage.get_user(message.from_user.id) or {}
+    await message.answer(_settings_text(user), parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Что меняем 👇", reply_markup=settings_kb())
