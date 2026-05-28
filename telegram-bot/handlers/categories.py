@@ -162,7 +162,8 @@ async def _addcat_type(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"✅ Создана категория {cat['emoji']} <b>{cat['name']}</b> "
         f"({'доход' if type_ == 'income' else 'расход'}).\n\n"
-        f"Используй её в Mini App или /myrec при создании регулярных платежей.",
+        f"Пока эта категория используется только в Mini App (дашборд и графики). "
+        f"В чат-боте при записи трат и регулярных платежей я выбираю из основного набора.",
         parse_mode="HTML",
     )
 

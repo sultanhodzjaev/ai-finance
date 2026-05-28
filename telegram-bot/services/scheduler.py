@@ -173,6 +173,8 @@ async def detect_abuse(bot: Bot) -> None:
 
 async def process_recurring_payments(bot: Bot) -> None:
     """Создаёт транзакции по всем due-регулярным платежам и переносит next_run_at."""
+    from utils.categories import get_category_by_id
+    from utils.formatters import format_amount
     created = 0
     for rp in storage.find_due_recurring_payments():
         try:
@@ -187,10 +189,16 @@ async def process_recurring_payments(bot: Bot) -> None:
             })
             next_at = datetime.now(timezone.utc) + timedelta(days=int(rp["period_days"]))
             storage.reschedule_recurring_payment(rp["id"], next_at)
+
+            user = storage.get_user(rp["telegram_id"]) or {}
+            currency = user.get("currency") or "KGS"
+            cat = get_category_by_id(rp["category"]) or {"emoji": "📦", "name": rp["category"]}
+            amount_view = format_amount(float(rp['amount']), currency)
+            label = rp['description'] or cat['name']
             await _send_safe(
                 bot, rp["telegram_id"],
                 f"🔁 Регулярный {'доход' if rp['type'] == 'income' else 'расход'}: "
-                f"<b>{rp['amount']}</b> «{rp['description'] or rp['category']}». "
+                f"<b>{amount_view}</b> · {cat['emoji']} {label}. "
                 f"Следующий: {next_at.strftime('%Y-%m-%d')}."
             )
             created += 1
