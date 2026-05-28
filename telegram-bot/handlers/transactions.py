@@ -68,8 +68,21 @@ router = Router()
 
 
 class TransactionStates(StatesGroup):
-    waiting_confirmation    = State()
-    waiting_category_change = State()
+    waiting_confirmation          = State()
+    waiting_category_change       = State()
+    waiting_batch_confirmation    = State()
+    waiting_batch_category_change = State()
+
+
+def _plural_ru(n: int, one: str, few: str, many: str) -> str:
+    """Простой плюрализатор: 1 трата / 2 траты / 5 трат."""
+    n10 = abs(n) % 10
+    n100 = abs(n) % 100
+    if n10 == 1 and n100 != 11:
+        return one
+    if 2 <= n10 <= 4 and not (12 <= n100 <= 14):
+        return few
+    return many
 
 
 def get_confirmation_keyboard() -> InlineKeyboardMarkup:
@@ -93,6 +106,60 @@ def get_categories_keyboard(tx_type: str = "expense") -> InlineKeyboardMarkup:
             ))
         buttons.append(row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def build_batch_text(items: list, currency: str, transcript: str) -> str:
+    """Карточка для нескольких операций из одного голосового."""
+    n = len(items)
+    word = _plural_ru(n, "операцию", "операции", "операций")
+    lines = [
+        f"🎙 Услышал: «{transcript}»",
+        "",
+        f"<b>Нашёл {n} {word}:</b>",
+        "",
+    ]
+    total_expense = 0.0
+    total_income  = 0.0
+    for i, it in enumerate(items, 1):
+        cat = get_category_by_id(it["category"]) or {"emoji": "📦", "name": it["category"]}
+        amt = format_amount(it["amount"], currency)
+        desc = it.get("description") or "—"
+        sign = "+" if it["type"] == "income" else ""
+        lines.append(f"{i}. {cat['emoji']} {cat['name']} — <b>{sign}{amt}</b> · {desc}")
+        if it["type"] == "income":
+            total_income += it["amount"]
+        else:
+            total_expense += it["amount"]
+
+    summary = []
+    if total_expense:
+        summary.append(f"💸 расход <b>{format_amount(total_expense, currency)}</b>")
+    if total_income:
+        summary.append(f"💰 доход <b>{format_amount(total_income, currency)}</b>")
+    if summary:
+        lines += ["", "Итого: " + " · ".join(summary)]
+    return "\n".join(lines)
+
+
+def get_batch_keyboard(n: int) -> InlineKeyboardMarkup:
+    """Клавиатура батч-подтверждения. Save All сверху, далее по строке edit/delete."""
+    rows = [[InlineKeyboardButton(text="✅ Сохранить все", callback_data="batch_save_all")]]
+    # Кнопки edit и delete — по 4 в ряд максимум, чтобы умещались на узком экране.
+    chunk = 4
+    for off in range(0, n, chunk):
+        edit_row = [
+            InlineKeyboardButton(text=f"✏️ {i+1}", callback_data=f"batch_edit_{i}")
+            for i in range(off, min(off + chunk, n))
+        ]
+        rows.append(edit_row)
+    for off in range(0, n, chunk):
+        del_row = [
+            InlineKeyboardButton(text=f"🗑 {i+1}", callback_data=f"batch_delete_{i}")
+            for i in range(off, min(off + chunk, n))
+        ]
+        rows.append(del_row)
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="batch_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_confirmation_text(data: dict) -> str:
@@ -418,8 +485,10 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
         logger.info(f"voice handler: transcript={transcript[:80]!r}")
         if not transcript:
             raise RuntimeError("empty transcript")
-        result = await gemini.categorize_text_transaction(transcript)
-        logger.info(f"voice handler: categorized success={result.get('success')}")
+        # Парсим как batch — даже одиночная трата приходит как items=[1]; так не
+        # дублируем логику и единственно меняется UX при n>1.
+        result = await gemini.categorize_text_transactions_batch(transcript)
+        logger.info(f"voice handler: categorized success={result.get('success')} n={len(result.get('items') or [])}")
     except RateLimitError:
         await processing_msg.delete()
         await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
@@ -439,24 +508,76 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
         )
         return
 
+    items: list = result["items"]
+
     db_user  = storage.get_user(user.id)
     currency = db_user.get("currency", "KGS") if db_user else "KGS"
 
-    transaction_data = {
-        "type":        result.get("type", "expense"),
-        "amount":      result["amount"],
-        "category":    result.get("category", "other"),
-        "description": result.get("description") or transcript[:80],
-        "merchant":    None,
-        "source":      "voice",
-        "currency":    currency,
-    }
-    await state.set_state(TransactionStates.waiting_confirmation)
-    await state.update_data(transaction=transaction_data)
+    # Trim до оставшейся квоты голосового. Limit-check в начале проверяет «есть
+    # ли вообще квота» (used < limit), но не знает n. Если в голосе 3 операции,
+    # а осталось 2 — режем до 2 и предупреждаем юзера, чтобы не перерасходовать.
+    plan = plans.effective_plan(db_user or {})
+    voice_limit = plans.limit_for(plan, "voice")
+    used_voice = storage.count_transactions_this_month(user.id, source="voice")
+    remaining = max(voice_limit - used_voice, 0)
+    trimmed = 0
+    if remaining and remaining < len(items):
+        trimmed = len(items) - remaining
+        items = items[:remaining]
+
+    # === Одиночная операция: используем существующую single-card-флоу ===
+    if len(items) == 1:
+        it = items[0]
+        transaction_data = {
+            "type":        it["type"],
+            "amount":      it["amount"],
+            "category":    it["category"],
+            "description": it["description"] or transcript[:80],
+            "merchant":    None,
+            "source":      "voice",
+            "currency":    currency,
+        }
+        await state.set_state(TransactionStates.waiting_confirmation)
+        await state.update_data(transaction=transaction_data)
+
+        # Одноразовая подсказка про батч-голос: транскрипт длинный (юзер явно
+        # пробовал говорить много), но Gemini увидел только 1 операцию —
+        # вероятно, он не знает, что так можно. Показываем ровно один раз.
+        hint = ""
+        if len(transcript) >= 60 and not storage.has_event_ever(user.id, "voice_batch_hint_shown"):
+            hint = (
+                "\n\n💡 <i>Можно говорить несколько трат подряд в одном голосовом — например, "
+                "«такси 500, обед 2000, кино 800» — я разнесу по категориям.</i>"
+            )
+            storage.log_event(user.id, "voice_batch_hint_shown", {"transcript_len": len(transcript)})
+
+        await message.answer(
+            f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(transaction_data) + hint,
+            reply_markup=get_confirmation_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    # === Несколько операций: batch-карточка ===
+    await state.set_state(TransactionStates.waiting_batch_confirmation)
+    await state.update_data(
+        batch_items=items,
+        batch_transcript=transcript,
+        batch_trimmed=trimmed,
+    )
+
+    text = build_batch_text(items, currency, transcript)
+    if trimmed:
+        word = _plural_ru(trimmed, "операция", "операции", "операций")
+        text += (
+            f"\n\n⚠️ Не поместилось ещё {trimmed} {word} — в этом месяце "
+            f"осталось {remaining} голосовых на тарифе <b>{plans.PLAN_TITLE.get(plan, plan)}</b>."
+        )
 
     await message.answer(
-        f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(transaction_data),
-        reply_markup=get_confirmation_keyboard(),
+        text,
+        reply_markup=get_batch_keyboard(len(items)),
+        parse_mode="HTML",
     )
 
 
@@ -509,6 +630,197 @@ async def handle_cancel_transaction(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     # Перезаписываем текст карточки на «отменено», чтобы не было «застрявшей»
     # подтверждалки и отдельного «Окей, отменил» — одно сообщение читается чище.
+    try:
+        await callback.message.edit_text("❌ Запись отменена.", reply_markup=None)
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Окей, отменил.")
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Batch-подтверждение (несколько операций из одного голосового)
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(TransactionStates.waiting_batch_confirmation, F.data == "batch_save_all")
+async def handle_batch_save_all(callback: CallbackQuery, state: FSMContext):
+    """Сохраняет все оставшиеся в батче операции одной транзакцией каждая."""
+    data = await state.get_data()
+    items: list = data.get("batch_items") or []
+    if not items:
+        await state.clear()
+        await callback.message.edit_text("❌ Нечего сохранять.")
+        await callback.answer()
+        return
+
+    saved = 0
+    for it in items:
+        try:
+            storage.add_transaction(callback.from_user.id, {
+                "id":          str(uuid.uuid4()),
+                "type":        it.get("type", "expense"),
+                "amount":      it["amount"],
+                "category":    it.get("category", "other"),
+                "description": it.get("description", ""),
+                "merchant":    None,
+                "datetime":    datetime.now().isoformat(),
+                "source":      "voice",
+            })
+            saved += 1
+        except Exception as e:
+            logger.error(f"batch save: tx failed: {e}")
+
+    await state.clear()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    word = _plural_ru(saved, "операцию", "операции", "операций")
+    await callback.message.answer(f"✅ Записал {saved} {word}! Так держать.")
+    await callback.answer()
+
+
+@router.callback_query(TransactionStates.waiting_batch_confirmation, F.data.startswith("batch_delete_"))
+async def handle_batch_delete(callback: CallbackQuery, state: FSMContext):
+    """Удаляет одну операцию из батча. Если остаётся 1 — переключаемся на single-card."""
+    try:
+        idx = int(callback.data.replace("batch_delete_", ""))
+    except ValueError:
+        await callback.answer("Не понял индекс")
+        return
+
+    data = await state.get_data()
+    items: list = data.get("batch_items") or []
+    transcript: str = data.get("batch_transcript") or ""
+    if not (0 <= idx < len(items)):
+        await callback.answer("Эта позиция уже не существует")
+        return
+
+    items.pop(idx)
+
+    if not items:
+        await state.clear()
+        try:
+            await callback.message.edit_text("❌ Удалил все позиции — нечего сохранять.")
+        except Exception:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer("Окей, отменил.")
+        await callback.answer()
+        return
+
+    db_user = storage.get_user(callback.from_user.id) or {}
+    currency = db_user.get("currency", "KGS")
+
+    if len(items) == 1:
+        # Остался один — переводим юзера в обычную single-card-карточку
+        it = items[0]
+        td = {
+            "type":        it.get("type", "expense"),
+            "amount":      it["amount"],
+            "category":    it.get("category", "other"),
+            "description": it.get("description") or transcript[:80],
+            "merchant":    None,
+            "source":      "voice",
+            "currency":    currency,
+        }
+        await state.set_state(TransactionStates.waiting_confirmation)
+        await state.update_data(transaction=td)
+        try:
+            await callback.message.edit_text(
+                f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(td),
+                reply_markup=get_confirmation_keyboard(),
+            )
+        except Exception:
+            await callback.message.answer(
+                build_confirmation_text(td),
+                reply_markup=get_confirmation_keyboard(),
+            )
+        await callback.answer("Удалил")
+        return
+
+    await state.update_data(batch_items=items)
+    text = build_batch_text(items, currency, transcript)
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_batch_keyboard(len(items)),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=get_batch_keyboard(len(items)),
+            parse_mode="HTML",
+        )
+    await callback.answer("Удалил")
+
+
+@router.callback_query(TransactionStates.waiting_batch_confirmation, F.data.startswith("batch_edit_"))
+async def handle_batch_edit(callback: CallbackQuery, state: FSMContext):
+    """Открывает выбор категории для конкретной операции из батча."""
+    try:
+        idx = int(callback.data.replace("batch_edit_", ""))
+    except ValueError:
+        await callback.answer("Не понял индекс")
+        return
+
+    data = await state.get_data()
+    items: list = data.get("batch_items") or []
+    if not (0 <= idx < len(items)):
+        await callback.answer("Эта позиция уже не существует")
+        return
+
+    tx_type = items[idx].get("type", "expense")
+    await state.set_state(TransactionStates.waiting_batch_category_change)
+    await state.update_data(batch_edit_idx=idx)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        f"Выбери категорию для позиции <b>{idx + 1}</b>:",
+        reply_markup=get_categories_keyboard(tx_type),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(TransactionStates.waiting_batch_category_change, F.data.startswith("cat_"))
+async def handle_batch_category_selected(callback: CallbackQuery, state: FSMContext):
+    """После выбора категории — возвращаем юзера к батч-карточке."""
+    new_cat_id = callback.data.replace("cat_", "")
+    data = await state.get_data()
+    items: list = data.get("batch_items") or []
+    transcript: str = data.get("batch_transcript") or ""
+    idx = data.get("batch_edit_idx")
+    if idx is None or not (0 <= idx < len(items)):
+        await callback.answer("Позиция потерялась")
+        return
+
+    items[idx]["category"] = new_cat_id
+    await state.update_data(batch_items=items, batch_edit_idx=None)
+    await state.set_state(TransactionStates.waiting_batch_confirmation)
+
+    db_user = storage.get_user(callback.from_user.id) or {}
+    currency = db_user.get("currency", "KGS")
+    text = build_batch_text(items, currency, transcript)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        text,
+        reply_markup=get_batch_keyboard(len(items)),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(TransactionStates.waiting_batch_confirmation, F.data == "batch_cancel")
+async def handle_batch_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     try:
         await callback.message.edit_text("❌ Запись отменена.", reply_markup=None)
     except Exception:

@@ -291,6 +291,22 @@ def log_event(telegram_id: int, event_type: str, metadata: dict | None = None) -
         logger.warning(f"log_event({telegram_id}, {event_type}): {e}")
 
 
+def has_event_ever(telegram_id: int, event_type: str) -> bool:
+    """Был ли у юзера хоть один event указанного типа за всё время.
+    Используется для one-shot подсказок («показать ровно один раз»)."""
+    try:
+        res = (
+            _client().table("events").select("id")
+            .eq("telegram_id", telegram_id)
+            .eq("type", event_type)
+            .limit(1).execute()
+        )
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"has_event_ever({telegram_id}, {event_type}): {e}")
+        return False
+
+
 def update_user_plan(
     telegram_id: int,
     plan: str,

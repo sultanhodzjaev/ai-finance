@@ -162,6 +162,81 @@ async def categorize_text_transaction(user_message: str) -> dict:
         raise
 
 
+async def categorize_text_transactions_batch(user_message: str) -> dict:
+    """
+    Извлекает СПИСОК финансовых операций из одного сообщения (типично — длинное
+    голосовое, в котором юзер перечисляет несколько трат). Возвращает
+    {"items": [...], "success": True} — каждый элемент имеет ту же структуру,
+    что и одиночный `categorize_text_transaction` (type/amount/category/description).
+    Если ни одной валидной операции не обнаружено — {"success": False, "reason": "..."}.
+    """
+    prompt = (
+        "Ты — AI-помощник для учёта личных финансов. "
+        "Пользователь прислал сообщение (часто это расшифровка голосового), в котором "
+        "может быть ОДНА или НЕСКОЛЬКО финансовых операций. Извлеки ВСЕ операции "
+        "по отдельности.\n\n"
+
+        "Пример входа: «потратил 500 сум на такси, ещё 2000 на обед и подписка 3000»\n"
+        "→ должно быть 3 элемента в items.\n\n"
+
+        "ТИП для каждой операции:\n"
+        '- "expense" — пользователь потратил\n'
+        '- "income"  — пользователь получил\n\n'
+        "КАТЕГОРИИ РАСХОДОВ (type=expense):\n"
+        "- food, groceries, transport, entertainment, health, clothes, home, "
+        "communication, gifts, other\n\n"
+        "КАТЕГОРИИ ДОХОДОВ (type=income):\n"
+        "- salary, freelance, business, investment, gift_income, other_income\n\n"
+        f'Сообщение пользователя: "{user_message}"\n\n'
+        "Ответь СТРОГО JSON без markdown и пояснений:\n"
+        '{"items": [{"type": "expense", "amount": число, "category": "id_категории", '
+        '"description": "краткое описание"}, ...], "success": true}\n\n'
+        "Если ни одной финансовой операции не нашёл:\n"
+        '{"success": false, "reason": "не похоже на финансовую операцию"}'
+    )
+
+    try:
+        # max_output_tokens=1024 — на 5-7 операций JSON помещается; больше — обычно
+        # либо галлюцинация, либо injection с попыткой вытянуть текст. Cost-guard.
+        text = await _generate([{"parts": [{"text": prompt}]}], max_output_tokens=1024)
+        result = _extract_json(text)
+
+        if not result.get("success"):
+            return result
+
+        items = result.get("items") or []
+        cleaned = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            amount = it.get("amount")
+            if not isinstance(amount, (int, float)) or amount <= 0:
+                continue
+            tx_type = "income" if it.get("type") == "income" else "expense"
+            cat = it.get("category")
+            if tx_type == "income" and cat not in VALID_INCOME_CATEGORIES:
+                cat = "other_income"
+            elif tx_type == "expense" and cat not in VALID_EXPENSE_CATEGORIES:
+                cat = "other"
+            cleaned.append({
+                "type":        tx_type,
+                "amount":      amount,
+                "category":    cat,
+                "description": (it.get("description") or "")[:200],
+            })
+
+        if not cleaned:
+            return {"success": False, "reason": "не удалось извлечь ни одной операции"}
+        return {"items": cleaned, "success": True}
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Ошибка парсинга JSON от Gemini (batch): {e}")
+        return {"success": False, "reason": "ошибка парсинга ответа"}
+    except Exception as e:
+        logger.error(f"Ошибка при запросе к Gemini API (batch): {e}")
+        raise
+
+
 async def recognize_receipt_photo(photo_bytes: bytes) -> dict:
     """
     Распознаёт чек на фото через Gemini Vision. Чеки — всегда расходы.
