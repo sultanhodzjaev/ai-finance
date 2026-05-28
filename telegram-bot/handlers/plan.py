@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timezone
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 

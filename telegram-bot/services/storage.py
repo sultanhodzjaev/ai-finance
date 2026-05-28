@@ -60,7 +60,7 @@ def get_user(telegram_id: int) -> dict | None:
 
 
 def create_user(telegram_id: int, username: str, first_name: str) -> dict:
-    """Создаёт нового пользователя."""
+    """Создаёт нового пользователя. currency='KGS' — дефолт из схемы; онбординг сразу спросит у юзера и поменяет."""
     user = {
         "telegram_id": telegram_id,
         "username":    username,
@@ -75,12 +75,28 @@ def create_user(telegram_id: int, username: str, first_name: str) -> dict:
         return {**user, "telegram_id": telegram_id}
 
 
+def update_user_currency(telegram_id: int, currency: str) -> None:
+    """Сохраняет выбранную юзером валюту. Старые транзакции не пересчитываются."""
+    try:
+        _client().table("users").update({"currency": currency}).eq("telegram_id", telegram_id).execute()
+    except Exception as e:
+        logger.error(f"update_user_currency({telegram_id}, {currency}): {e}")
+
+
 def get_or_create_user(telegram_id: int, username: str, first_name: str) -> dict:
     """Возвращает существующего пользователя или создаёт нового."""
     user = get_user(telegram_id)
     if user is None:
         user = create_user(telegram_id, username, first_name)
     return user
+
+
+def get_or_create_user_with_flag(telegram_id: int, username: str, first_name: str) -> tuple[dict, bool]:
+    """Как get_or_create_user, но второй кортеж — True если юзер только что создан."""
+    user = get_user(telegram_id)
+    if user is None:
+        return create_user(telegram_id, username, first_name), True
+    return user, False
 
 
 # ---------------------------------------------------------------------------

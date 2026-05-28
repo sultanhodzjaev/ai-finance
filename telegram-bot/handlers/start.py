@@ -1,59 +1,14 @@
 import logging
-import os
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import (
-    Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo,
-)
+from aiogram.types import Message
 
 from services import storage
+from handlers.onboarding import currency_picker_kb, main_kb
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-# URL Mini App — берём из переменной окружения WEBAPP_URL,
-# или вычисляем автоматически из REPLIT_DOMAINS (формат: domain1,domain2,...)
-def _get_webapp_url() -> str:
-    explicit = os.getenv("WEBAPP_URL", "")
-    if explicit:
-        return explicit
-    domains = os.getenv("REPLIT_DOMAINS", "")
-    if domains:
-        first_domain = domains.split(",")[0].strip()
-        return f"https://{first_domain}/miniapp"
-    return ""
-
-
-def get_main_menu() -> InlineKeyboardMarkup:
-    """Возвращает главное меню с кнопкой открытия Mini App."""
-    webapp_url = _get_webapp_url()
-    buttons = []
-
-    # Кнопка Mini App — если URL доступен
-    if webapp_url:
-        buttons.append([
-            InlineKeyboardButton(
-                text="📲 Открыть приложение",
-                web_app=WebAppInfo(url=webapp_url),
-            )
-        ])
-
-    buttons += [
-        [
-            InlineKeyboardButton(text="💬 Спросить финансиста", callback_data="ask_advisor"),
-            InlineKeyboardButton(text="📊 Статистика",          callback_data="show_stats"),
-        ],
-        [
-            InlineKeyboardButton(text="📅 За сегодня", callback_data="show_today"),
-            InlineKeyboardButton(text="❓ Помощь",     callback_data="show_help"),
-        ],
-        [
-            InlineKeyboardButton(text="🎁 Пригласить друга +14 дней Premium", callback_data="show_invite"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
 REFERRAL_BONUS_DAYS = 14
 
@@ -98,7 +53,7 @@ async def _apply_referral(new_user_id: int, ref_param: str) -> tuple[bool, str |
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    """Обрабатывает /start — регистрирует пользователя, обрабатывает реферал, показывает меню."""
+    """Обрабатывает /start — регистрирует пользователя, обрабатывает реферал, запускает онбординг."""
     user = message.from_user
 
     # Защита от Telegram-ботов
@@ -108,7 +63,7 @@ async def cmd_start(message: Message):
 
     first_name = user.first_name or "Друг"
 
-    storage.get_or_create_user(
+    _, is_new = storage.get_or_create_user_with_flag(
         telegram_id=user.id,
         username=user.username or "",
         first_name=first_name,
@@ -125,20 +80,24 @@ async def cmd_start(message: Message):
                 f"Тебе и {referrer_name} начислено по {REFERRAL_BONUS_DAYS} дней Premium.\n"
             )
 
-    webapp_url = _get_webapp_url()
-    webapp_note = "\n• 📲 Полноценный дашборд в Mini App — кнопка выше" if webapp_url else ""
+    if is_new:
+        # Свежий юзер → приветствие + выбор валюты. Trial-интро отправится после выбора (в onboarding.cb_set_currency).
+        await message.answer(
+            f"👋 Привет, {first_name}!\n\n"
+            "Я — твой AI-финансист. Веду учёт трат без таблиц: пишешь обычным сообщением — "
+            "я разбираю сумму, категорию и сохраняю. Голос и фото чеков тоже понимаю.\n\n"
+            f"{referral_note}"
+            "<b>Сначала выбери основную валюту</b> — в ней будут считаться все траты 👇",
+            parse_mode="HTML",
+            reply_markup=currency_picker_kb(),
+        )
+        return
 
+    # Возвращающийся юзер → лёгкое приветствие + постоянная клавиатура внизу
     await message.answer(
-        f"👋 Привет, {first_name}!\n\n"
-        "Я — твой личный AI-финансист. Помогу вести учёт трат без таблиц и заморочек.\n\n"
-        "🔥 Что я умею:\n"
-        "• 💬 Записываю траты по текстовому сообщению («потратил 500 на обед»)\n"
-        "• 📷 Распознаю чеки по фото\n"
-        "• 🤖 Отвечаю на вопросы о твоих финансах\n"
-        "• 📊 Показываю статистику за день, неделю, месяц"
-        f"{webapp_note}"
-        f"{referral_note}\n\n"
-        "Просто напиши свою первую трату или нажми кнопку ниже 👇",
-        reply_markup=get_main_menu(),
+        f"👋 С возвращением, {first_name}!\n\n"
+        "Напиши трату обычным сообщением или выбери действие ниже 👇"
+        f"{referral_note}",
         parse_mode="HTML",
+        reply_markup=main_kb(),
     )
