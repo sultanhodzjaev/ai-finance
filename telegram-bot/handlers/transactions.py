@@ -722,6 +722,9 @@ async def handle_card_save(callback: CallbackQuery, state: FSMContext):
         "source":      td.get("source", "text"),
     }
     storage.add_transaction(callback.from_user.id, transaction)
+    if tx_type == "expense":
+        from services.budgets import maybe_alert_budget
+        await maybe_alert_budget(callback.message.bot, callback.from_user.id, td["category"])
     await _remove_card(state, callback.from_user.id, card_id)
 
     currency = td.get("currency", "KGS")
@@ -830,6 +833,7 @@ async def handle_batch_save_all(callback: CallbackQuery, state: FSMContext):
         return
 
     saved = 0
+    alerted_categories: set[str] = set()  # один пуш на категорию даже если в батче несколько трат туда
     for it in items:
         try:
             storage.add_transaction(callback.from_user.id, {
@@ -843,6 +847,12 @@ async def handle_batch_save_all(callback: CallbackQuery, state: FSMContext):
                 "source":      "voice",
             })
             saved += 1
+            if it.get("type", "expense") == "expense":
+                cat = it.get("category", "other")
+                if cat not in alerted_categories:
+                    alerted_categories.add(cat)
+                    from services.budgets import maybe_alert_budget
+                    await maybe_alert_budget(callback.message.bot, callback.from_user.id, cat)
         except Exception as e:
             logger.error(f"batch save: tx failed: {e}")
 

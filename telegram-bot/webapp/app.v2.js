@@ -325,6 +325,7 @@ function render() {
             ${state.screen === 'help'      ? buildHelp()      : ''}
             ${state.screen === 'categories'? buildCategories(): ''}
             ${state.screen === 'recurring' ? buildRecurring() : ''}
+            ${state.screen === 'budgets'   ? buildBudgets()   : ''}
         </div>
         ${buildNav()}
         ${buildBottomSheet()}
@@ -348,6 +349,7 @@ function render() {
     if (state.screen === 'help')      attachHelpHandlers();
     if (state.screen === 'categories'){ attachCategoriesHandlers(); if (state.catFormOpen) attachCategoryFormHandlers(); }
     if (state.screen === 'recurring') { attachRecurringHandlers();  if (state.recFormOpen) attachRecurringFormHandlers(); }
+    if (state.screen === 'budgets')   { attachBudgetsHandlers();    if (state.budgetFormOpen) attachBudgetFormHandlers(); }
     if (state.currencyPickerOpen)     attachCurrencyPickerHandlers();
     if (state.selectedTx)             attachSheetHandlers();
     syncBackButton();
@@ -1563,7 +1565,7 @@ function buildSettings() {
             <p class="eyebrow mb-2 mt-5">Управление</p>
             <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
                  style="background:var(--surface);border:1px solid var(--border)">
-                ${row('target', 'Бюджеты по категориям',  '', null, 'скоро')}
+                ${row('target', 'Бюджеты по категориям',  '', 'settings_budgets')}
                 ${row('tags',   'Кастомные категории',     '', 'settings_categories')}
                 ${row('repeat', 'Регулярные платежи',      '', 'settings_recurring')}
             </div>
@@ -1590,6 +1592,7 @@ function attachSettingsHandlers() {
             else if (action === 'settings_help')      { goTo('help'); }
             else if (action === 'settings_categories'){ goTo('categories'); }
             else if (action === 'settings_recurring') { state.recurringList = null; goTo('recurring'); }
+            else if (action === 'settings_budgets')   { state.budgets = null; goTo('budgets'); }
         });
     });
 }
@@ -2269,6 +2272,206 @@ function attachRecurringFormHandlers() {
             tg?.HapticFeedback?.notificationOccurred?.('success');
         } catch (e) {
             tg?.showAlert?.(`Не удалось создать: ${e.message}`);
+        }
+    });
+}
+
+
+// ============================================================
+// ЭКРАН: БЮДЖЕТЫ ПО КАТЕГОРИЯМ
+// ============================================================
+function buildBudgets() {
+    if (state.budgets === null || state.budgets === undefined) {
+        (async () => {
+            try {
+                const res = await api('GET', '/me/budgets');
+                state.budgets = res.budgets || [];
+                render();
+            } catch (e) { state.budgets = []; render(); }
+        })();
+        return `<div class="px-4 pt-6 text-gray-500">Загружаю...</div>`;
+    }
+
+    const bs = state.budgets;
+    const empty = !bs.length;
+    const currency = state.me?.currency || 'KGS';
+
+    const progressBar = (pct) => {
+        const clamped = Math.min(pct, 100);
+        const color = pct >= 100 ? 'var(--negative)' : pct >= 80 ? '#f59e0b' : 'var(--accent)';
+        return `
+            <div class="h-1.5 rounded-full overflow-hidden mt-2" style="background:var(--bg)">
+                <div class="h-full" style="width:${clamped}%; background:${color}"></div>
+            </div>`;
+    };
+
+    return `
+        <div class="px-4 pt-5 pb-24">
+            <h1 class="h-display mb-2">Бюджеты</h1>
+            <p class="text-[13px] mb-5" style="color:var(--text-muted)">
+                Установи месячный лимит на категорию — бот напомнит при 80% и 100%
+                израсходовано. Один пуш на порог в месяц, чтобы не спамить.
+            </p>
+
+            ${empty ? `
+                <div class="rounded-2xl p-6 text-center" style="background:var(--surface);border:1px solid var(--border)">
+                    <p class="text-[15px] mb-1" style="color:var(--text)">Пока нет бюджетов</p>
+                    <p class="text-[13px]" style="color:var(--text-muted)">Добавь — бот будет следить.</p>
+                </div>
+            ` : `
+                <div class="space-y-2">
+                    ${bs.map(b => {
+                        const cat = findCategoryById(b.category);
+                        const cur = b.currency || currency;
+                        return `
+                        <div class="rounded-2xl p-4"
+                             style="background:var(--surface);border:1px solid var(--border)">
+                            <div class="flex items-center gap-3">
+                                <span class="text-xl flex-shrink-0">${cat.emoji}</span>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-[14px] font-semibold truncate" style="color:var(--text)">
+                                        ${cat.name}
+                                    </p>
+                                    <p class="text-[11px]" style="color:var(--text-faint)">
+                                        ${fmt(b.spent_this_month)} / ${fmt(b.monthly_limit)} ${cur} · ${b.pct}%
+                                    </p>
+                                </div>
+                                <button class="budget-delete-btn text-[11px]"
+                                        data-budget-cat="${b.category}" style="color:var(--negative)">
+                                    Удалить
+                                </button>
+                            </div>
+                            ${progressBar(b.pct)}
+                        </div>`;
+                    }).join('')}
+                </div>
+            `}
+
+            <button id="budget-add-btn"
+                    class="fixed right-4 bottom-24 px-5 py-3 rounded-full text-white font-semibold text-[14px]
+                           flex items-center gap-2 active:scale-95 transition"
+                    style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%);
+                           filter:drop-shadow(0 6px 16px rgba(99,102,241,0.40))">
+                ${icon('plus', 'w-4 h-4')} Добавить бюджет
+            </button>
+        </div>
+        ${state.budgetFormOpen ? buildBudgetForm() : ''}`;
+}
+
+
+function buildBudgetForm() {
+    const f = state.budgetForm || { category: '', amount: '' };
+    // Бюджет только на расходные категории. Скрываем уже занятые — UPSERT
+    // конечно поддерживается, но в UI логичнее редактировать существующий
+    // через клик на карточку (TODO в next iteration), а тут — только новые.
+    const usedCats = new Set((state.budgets || []).map(b => b.category));
+    const allCats = state.expenseCategories || [];
+    const freeCats = allCats.filter(c => !usedCats.has(c.id));
+    const currency = state.me?.currency || 'KGS';
+    return `
+        <div class="fixed inset-0 z-50 flex items-end justify-center" style="background:rgba(0,0,0,0.5)" id="budget-form-overlay">
+            <div class="w-full max-w-md rounded-t-3xl pb-6 pt-3 px-4 sheet-enter max-h-[85vh] overflow-y-auto"
+                 style="background:var(--surface)" onclick="event.stopPropagation()">
+                <div class="w-12 h-1 rounded-full mx-auto mb-4" style="background:var(--border)"></div>
+                <h3 class="text-base font-semibold mb-4" style="color:var(--text)">Новый бюджет</h3>
+
+                ${freeCats.length === 0 ? `
+                    <p class="text-[13px] py-4" style="color:var(--text-muted)">
+                        У всех расходных категорий уже есть бюджет. Удали ненужный — потом добавишь новый.
+                    </p>
+                ` : `
+                    <div class="mt-1">
+                        <span class="eyebrow">Категория</span>
+                        <div class="grid grid-cols-2 gap-2 mt-1.5">
+                            ${freeCats.map(c => `
+                                <button class="budget-cat-btn py-2 px-3 rounded-xl text-[13px] flex items-center gap-2 text-left"
+                                        data-cat-id="${c.id}"
+                                        style="background:${f.category === c.id ? 'var(--accent-soft)' : 'var(--bg)'};
+                                               color:${f.category === c.id ? 'var(--accent)' : 'var(--text)'};
+                                               border:1px solid ${f.category === c.id ? 'var(--accent)' : 'var(--border)'}">
+                                    <span>${c.emoji || '📦'}</span>
+                                    <span class="truncate">${c.name}</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <label class="block mt-4">
+                        <span class="eyebrow">Лимит в месяц (${currency})</span>
+                        <input id="budget-form-amount" type="number" inputmode="decimal" value="${f.amount}"
+                               placeholder="30000"
+                               class="w-full mt-1.5 px-3 py-2.5 rounded-xl text-[15px]"
+                               style="background:var(--bg);color:var(--text);border:1px solid var(--border)">
+                    </label>
+
+                    <button id="budget-form-submit"
+                            class="w-full mt-5 py-3 rounded-xl text-white font-semibold text-[15px] active:scale-[0.98] transition"
+                            style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                        Сохранить
+                    </button>
+                `}
+            </div>
+        </div>`;
+}
+
+
+function attachBudgetsHandlers() {
+    document.getElementById('budget-add-btn')?.addEventListener('click', () => {
+        state.budgetForm = { category: '', amount: '' };
+        state.budgetFormOpen = true;
+        render();
+    });
+    document.querySelectorAll('.budget-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const cat = btn.dataset.budgetCat;
+            const tg = window.Telegram?.WebApp;
+            const confirm = (msg) => new Promise(res => {
+                if (tg?.showConfirm) tg.showConfirm(msg, ok => res(ok));
+                else res(window.confirm(msg));
+            });
+            if (!await confirm('Удалить бюджет на этой категории?')) return;
+            try {
+                await api('DELETE', `/me/budgets/${encodeURIComponent(cat)}`);
+                state.budgets = (state.budgets || []).filter(b => b.category !== cat);
+                render();
+                tg?.HapticFeedback?.notificationOccurred?.('success');
+            } catch (e) {
+                if (tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
+            }
+        });
+    });
+}
+
+
+function attachBudgetFormHandlers() {
+    document.getElementById('budget-form-overlay')?.addEventListener('click', () => {
+        state.budgetFormOpen = false; render();
+    });
+    document.getElementById('budget-form-amount')?.addEventListener('input', (e) => {
+        state.budgetForm.amount = e.target.value;
+    });
+    document.querySelectorAll('.budget-cat-btn').forEach(b =>
+        b.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            state.budgetForm.category = b.dataset.catId; render();
+        }));
+    document.getElementById('budget-form-submit')?.addEventListener('click', async () => {
+        const f = state.budgetForm;
+        const tg = window.Telegram?.WebApp;
+        const amount = parseFloat(f.amount);
+        if (!f.category) { tg?.showAlert?.('Выбери категорию'); return; }
+        if (!amount || amount <= 0) { tg?.showAlert?.('Введи сумму больше нуля'); return; }
+        try {
+            const res = await api('POST', '/me/budgets', {
+                category: f.category, monthly_limit: amount,
+            });
+            // upsert — может вернуть новый или обновлённый; для простоты перечитываем список
+            state.budgets = null;
+            state.budgetFormOpen = false;
+            render();
+            tg?.HapticFeedback?.notificationOccurred?.('success');
+        } catch (e) {
+            tg?.showAlert?.(`Не удалось сохранить: ${e.message}`);
         }
     });
 }

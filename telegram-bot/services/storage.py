@@ -718,6 +718,120 @@ def reschedule_recurring_payment(rp_id: str, next_run_at: datetime) -> None:
 # Бан-список
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Бюджеты на категории
+# ---------------------------------------------------------------------------
+
+def list_budgets(telegram_id: int) -> list:
+    """Все бюджеты юзера. Сортировка — по дате создания."""
+    try:
+        res = (
+            _client().table("category_budgets").select("*")
+            .eq("telegram_id", telegram_id).order("created_at").execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.error(f"list_budgets({telegram_id}): {e}")
+        return []
+
+
+def get_budget(telegram_id: int, category: str) -> dict | None:
+    """Бюджет на конкретную категорию или None."""
+    try:
+        res = (
+            _client().table("category_budgets").select("*")
+            .eq("telegram_id", telegram_id).eq("category", category)
+            .maybe_single().execute()
+        )
+        return res.data
+    except Exception as e:
+        logger.error(f"get_budget({telegram_id}, {category}): {e}")
+        return None
+
+
+def count_budgets(telegram_id: int) -> int:
+    try:
+        res = (
+            _client().table("category_budgets").select("id", count="exact")
+            .eq("telegram_id", telegram_id).execute()
+        )
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_budgets({telegram_id}): {e}")
+        return 0
+
+
+def upsert_budget(telegram_id: int, category: str, monthly_limit: float, currency: str) -> dict | None:
+    """Создать/обновить бюджет. UNIQUE(telegram_id, category) гарантирует один на категорию.
+    PostgREST upsert через on_conflict — атомарно."""
+    try:
+        res = (
+            _client().table("category_budgets")
+            .upsert({
+                "telegram_id": telegram_id,
+                "category":    category,
+                "monthly_limit": float(monthly_limit),
+                "currency":    currency,
+                "updated_at":  datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="telegram_id,category")
+            .execute()
+        )
+        return (res.data or [None])[0]
+    except Exception as e:
+        logger.error(f"upsert_budget({telegram_id}, {category}): {e}")
+        return None
+
+
+def delete_budget(telegram_id: int, category: str) -> bool:
+    try:
+        res = (
+            _client().table("category_budgets").delete()
+            .eq("telegram_id", telegram_id).eq("category", category)
+            .execute()
+        )
+        return len(res.data or []) > 0
+    except Exception as e:
+        logger.error(f"delete_budget({telegram_id}, {category}): {e}")
+        return False
+
+
+def has_budget_alert_sent(telegram_id: int, category: str, month_key: str, threshold: str) -> bool:
+    """Был ли уже пуш про бюджет (порог `threshold` ∈ {"80","100"}) в `month_key`
+    (формат YYYY-MM) по конкретной категории. Используется для идемпотентности
+    алёртов — не спамим один и тот же порог в течение месяца."""
+    try:
+        res = (
+            _client().table("events").select("id")
+            .eq("telegram_id", telegram_id)
+            .eq("type", f"budget_alert_{threshold}")
+            .filter("metadata->>category", "eq", category)
+            .filter("metadata->>month", "eq", month_key)
+            .limit(1).execute()
+        )
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"has_budget_alert_sent({telegram_id}, {category}, {month_key}, {threshold}): {e}")
+        return False
+
+
+def sum_category_expense_this_month(telegram_id: int, category: str) -> float:
+    """Сумма расходов юзера по конкретной категории с начала текущего календарного месяца (UTC).
+    Используется для расчёта прогресса бюджета и проверки порогов 80/100%."""
+    try:
+        res = (
+            _client().table("transactions").select("amount")
+            .eq("telegram_id", telegram_id)
+            .eq("category", category)
+            .eq("type", "expense")
+            .gte("created_at", _month_start_utc())
+            .execute()
+        )
+        return float(sum((row.get("amount") or 0) for row in (res.data or [])))
+    except Exception as e:
+        logger.error(f"sum_category_expense_this_month({telegram_id}, {category}): {e}")
+        return 0.0
+
+
 def is_banned(telegram_id: int) -> bool:
     try:
         res = _client().table("banned_users").select("telegram_id") \

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, HTTPException, Header, Query, Request
 
 from api.auth import get_telegram_id, validate_init_data, parse_init_data_user
 from services.storage import (
@@ -131,6 +131,84 @@ async def delete_my_category(cat_id: str, x_init_data: str = Header(...)):
     return {"ok": True}
 
 
+# ---------- Бюджеты по категориям ----------
+
+@router.get("/me/budgets")
+async def list_my_budgets(x_init_data: str = Header(...)):
+    """Все бюджеты юзера + текущий прогресс расхода за месяц."""
+    from services.storage import list_budgets, sum_category_expense_this_month
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    budgets = list_budgets(telegram_id)
+    result = []
+    for b in budgets:
+        spent = sum_category_expense_this_month(telegram_id, b["category"])
+        result.append({
+            **b,
+            "spent_this_month": spent,
+            "remaining":        max(float(b["monthly_limit"]) - spent, 0),
+            "pct":              round(spent / float(b["monthly_limit"]) * 100, 1) if float(b["monthly_limit"]) > 0 else 0,
+        })
+    return {"budgets": result}
+
+
+@router.post("/me/budgets")
+async def upsert_my_budget(payload: dict, x_init_data: str = Header(...)):
+    """Создать/обновить бюджет на категорию. UPSERT — один бюджет на категорию."""
+    from services.storage import upsert_budget, get_budget, count_budgets, log_event
+    from services import plans
+    from utils.categories import get_category_by_id
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+
+    category = (payload.get("category") or "").strip()
+    monthly_limit = payload.get("monthly_limit")
+    currency = (payload.get("currency") or user.get("currency") or "KGS").strip()
+    if not category:
+        raise HTTPException(status_code=400, detail="category required")
+    try:
+        monthly_limit = float(monthly_limit)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="monthly_limit must be number")
+    if monthly_limit <= 0:
+        raise HTTPException(status_code=400, detail="monthly_limit must be > 0")
+    # Категория должна существовать — либо базовая, либо кастомная этого юзера
+    if not get_category_by_id(category):
+        from services.storage import get_custom_categories
+        customs = get_custom_categories(telegram_id)
+        if not any(c["id"] == category for c in customs):
+            raise HTTPException(status_code=404, detail="category not found")
+
+    # Лимит планa: бесплатным бюджеты не доступны вообще, у платных есть верх
+    is_new = get_budget(telegram_id, category) is None
+    if is_new:
+        plan = plans.effective_plan(user)
+        cap = plans.LIMITS.get(plan, {}).get("budgets_max") or 0
+        have = count_budgets(telegram_id)
+        if cap == 0:
+            log_event(telegram_id, "limit_hit", {"action": "budget_create", "plan": plan})
+            raise HTTPException(status_code=402, detail="бюджеты недоступны на твоём тарифе — /upgrade")
+        if have >= cap:
+            log_event(telegram_id, "limit_hit", {"action": "budget_create", "used": have, "limit": cap})
+            raise HTTPException(status_code=402, detail=f"лимит бюджетов исчерпан ({have}/{cap})")
+
+    budget = upsert_budget(telegram_id, category, monthly_limit, currency)
+    if not budget:
+        raise HTTPException(status_code=500, detail="failed to save")
+    return {"budget": budget}
+
+
+@router.delete("/me/budgets/{category}")
+async def delete_my_budget(category: str, x_init_data: str = Header(...)):
+    from services.storage import delete_budget
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    ok = delete_budget(telegram_id, category)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
 # ---------- Регулярные платежи ----------
 
 @router.get("/recurring")
@@ -251,8 +329,10 @@ async def list_transactions(
 
 
 @router.post("/transactions")
-async def create_transaction(payload: dict, x_init_data: str = Header(...)):
-    """Создать транзакцию из Mini App (без AI)."""
+async def create_transaction(payload: dict, request: Request, x_init_data: str = Header(...)):
+    """Создать транзакцию из Mini App (без AI). После сохранения шлём
+    бюджет-алёрт если применимо (расход в категории с активным бюджетом
+    и пересекли 80%/100%)."""
     from utils.safety import sanitize_input, detect_injection
     from services.storage import log_event
     telegram_id = require_auth(x_init_data)
@@ -275,6 +355,10 @@ async def create_transaction(payload: dict, x_init_data: str = Header(...)):
         "source":      "miniapp",
     }
     add_transaction(telegram_id, tx)
+    if tx["type"] == "expense":
+        from services.budgets import maybe_alert_budget
+        bot = getattr(request.app.state, "bot", None)
+        await maybe_alert_budget(bot, telegram_id, tx["category"])
     return tx
 
 

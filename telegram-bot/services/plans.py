@@ -42,6 +42,7 @@ LIMITS: dict[str, dict] = {
         "history_days":            None,         # вся за период триала
         "categories_max":          15,
         "recurring_payments_max":  5,
+        "budgets_max":             10,
         "csv_import":              False,
         "exports_total":           1,            # 1 разовая выгрузка за весь триал
         "mini_app_analytics":      "full",
@@ -54,6 +55,7 @@ LIMITS: dict[str, dict] = {
         "history_days":            30,
         "categories_max":          5,
         "recurring_payments_max":  1,
+        "budgets_max":             0,
         "csv_import":              False,
         "exports_per_month":       0,
         "mini_app_analytics":      "basic",
@@ -66,6 +68,7 @@ LIMITS: dict[str, dict] = {
         "history_days":            365,
         "categories_max":          30,
         "recurring_payments_max":  10,
+        "budgets_max":             10,
         "csv_import":              True,
         "exports_per_month":       3,
         "mini_app_analytics":      "full",
@@ -78,6 +81,7 @@ LIMITS: dict[str, dict] = {
         "history_days":            730,
         "categories_max":          100,
         "recurring_payments_max":  50,
+        "budgets_max":             50,
         "csv_import":              True,
         "exports_per_month":       10,
         "mini_app_analytics":      "full",
@@ -91,6 +95,7 @@ LIMITS: dict[str, dict] = {
         "history_days":            None,            # вся история
         "categories_max":          1_000_000,
         "recurring_payments_max":  1_000_000,
+        "budgets_max":             1_000_000,
         "csv_import":              True,
         "exports_per_month":       1_000_000,
         "mini_app_analytics":      "full",
