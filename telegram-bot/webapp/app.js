@@ -137,6 +137,38 @@ function dashboardTitle() {
     return 'Период';
 }
 
+// Streak — сколько дней подряд (от сегодня или вчера) есть записи.
+// Логика согласована с utils/streak.py: если сегодня запись была — стартуем от
+// сегодня; иначе пытаемся стартовать от вчера, чтобы юзер не терял прогресс до
+// конца дня. Дни без транзакций любого источника обрывают streak.
+function computeStreakDays(transactions) {
+    if (!transactions || !transactions.length) return 0;
+    const oneDay = 86400000;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const txDays = new Set();
+    for (const t of transactions) {
+        const d = new Date(t.datetime);
+        if (isNaN(d.getTime())) continue;
+        d.setHours(0,0,0,0);
+        txDays.add(d.getTime());
+    }
+    const todayMs = today.getTime();
+    let cur;
+    if (txDays.has(todayMs)) cur = todayMs;
+    else if (txDays.has(todayMs - oneDay)) cur = todayMs - oneDay;
+    else return 0;
+    let streak = 0;
+    while (txDays.has(cur)) { streak++; cur -= oneDay; }
+    return streak;
+}
+
+function streakWord(n) {
+    if (n === 1) return 'день';
+    if (n >= 2 && n <= 4) return 'дня';
+    return 'дней';
+}
+
+
 // Подпись под Остатком в hero-карточке. Прячемся от banal-копирайта:
 // если есть доход — показываем savings rate, иначе нейтральное сообщение.
 function heroSubline(totalIncome, balance, balancePct) {
@@ -326,6 +358,17 @@ function buildDashboard() {
     const balance      = totalIncome - totalExpense;
     const balancePct   = balance >= 0;
 
+    // Streak считаем по ВСЕМ транзакциям (не зависит от выбранного периода).
+    const streak = computeStreakDays(state.transactions);
+    const todayLogged = (() => {
+        const today = new Date(); today.setHours(0,0,0,0);
+        return state.transactions.some(t => {
+            const d = new Date(t.datetime); if (isNaN(d.getTime())) return false;
+            d.setHours(0,0,0,0);
+            return d.getTime() === today.getTime();
+        });
+    })();
+
     // Топ-3 расходов
     const byCat = {};
     expenses.forEach(t => { byCat[t.category] = (byCat[t.category]||0) + t.amount; });
@@ -345,6 +388,13 @@ function buildDashboard() {
                 <div>
                     <p class="eyebrow mb-1">Привет, ${state.me?.first_name||'Друг'}</p>
                     <h1 class="h-display">${dashboardTitle()}</h1>
+                    ${streak > 0 ? `
+                        <div class="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full text-[12px] font-semibold"
+                             style="background:rgba(249,115,22,0.12);color:#ea580c"
+                             title="${todayLogged ? 'Так держать!' : 'Запиши сегодня, чтобы не потерять стрик'}">
+                            🔥 ${streak} ${streakWord(streak)} подряд
+                            ${!todayLogged ? '<span style="opacity:.7">· сегодня ещё нет</span>' : ''}
+                        </div>` : ''}
                 </div>
                 <div class="w-10 h-10 rounded-full flex items-center justify-center"
                      style="background:var(--accent-soft);color:var(--accent)">

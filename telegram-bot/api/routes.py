@@ -149,6 +149,9 @@ async def get_stats(x_init_data: str = Header(...)):
     total_expense = sum(expense_by_category.values())
     total_income  = sum(income_by_category.values())
 
+    from utils.streak import compute_streak_days
+    streak = compute_streak_days(txs)
+
     return {
         "total_income":        total_income,
         "total_expense":       total_expense,
@@ -158,6 +161,7 @@ async def get_stats(x_init_data: str = Header(...)):
         "income_by_category":  income_by_category,
         "expense_by_day":      expense_by_day,
         "income_by_day":       income_by_day,
+        "streak_days":         streak,
     }
 
 
