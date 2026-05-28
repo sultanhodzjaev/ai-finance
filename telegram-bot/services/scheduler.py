@@ -196,6 +196,88 @@ async def detect_abuse(bot: Bot) -> None:
             logger.warning(f"abuse alert to admin failed: {e}")
 
 
+async def poll_lava_invoices(bot: Bot) -> None:
+    """Polling-обходняк для Lava-платежей: их webhook'и для Public API не доходят
+    (известный баг, подтверждён в flowo-academy). Раз в минуту тянем последние
+    50 invoice'ов из Lava, фильтруем COMPLETED, активируем подписку, шлём пуш.
+    Идемпотентность — через events.lava_processed с contract_id в metadata."""
+    from services import lava, plans
+
+    items = await lava.list_recent_invoices(size=50)
+    if not items:
+        return
+    processed = 0
+    skipped = 0
+    errors = 0
+
+    for inv in items:
+        if inv.get("status") != "COMPLETED":
+            skipped += 1
+            continue
+        contract_id = str(inv.get("id") or "")
+        if not contract_id:
+            skipped += 1
+            continue
+        # Идемпотентность: contract_id уже в metadata какого-то subscription_paid
+        if storage.has_processed_invoice(contract_id):
+            skipped += 1
+            continue
+
+        email = (((inv.get("buyer") or {}).get("email")) or "").strip()
+        telegram_id = lava.parse_telegram_id_from_email(email)
+        if not telegram_id:
+            logger.warning(f"poll_lava: can't parse telegram_id email={email!r} contract={contract_id}")
+            skipped += 1
+            continue
+
+        # Тариф по сумме — USD-сумма матчится с USD_TO_PLAN
+        receipt = inv.get("receipt") or {}
+        amount = receipt.get("amount")
+        try:
+            amount_int = int(round(float(amount)))
+        except (TypeError, ValueError):
+            amount_int = 0
+        tier = plans.USD_TO_PLAN.get(amount_int)
+        if not tier:
+            logger.warning(f"poll_lava: unknown tier for amount={amount} tg={telegram_id} contract={contract_id}")
+            skipped += 1
+            continue
+
+        # Тип инвойса: первая оплата vs продление — нужно для текста пуша
+        inv_type = inv.get("type") or ""
+        is_recurring = inv_type == "SUBSCRIPTION_RECURRING_INVOICE"
+
+        try:
+            # activate_subscription сам залогирует subscription_paid с contract_id —
+            # это и есть наша идемпотентность для следующего тика
+            storage.activate_subscription(telegram_id, tier, days=30, contract_id=contract_id)
+            title = plans.PLAN_TITLE.get(tier, tier)
+            if is_recurring:
+                text = (
+                    f"🔄 <b>Подписка {title} продлена на 30 дней.</b>\n"
+                    f"Списано: ${amount_int}.\n\n"
+                    f"<b>Лимиты на следующий месяц:</b>\n"
+                    f"{plans.format_limits_summary(tier)}"
+                )
+            else:
+                text = (
+                    f"🎉 <b>Подписка {title} активирована!</b>\n\n"
+                    f"Списано: ${amount_int}/мес\n"
+                    f"Следующее списание через 30 дней.\n\n"
+                    f"<b>Теперь доступно:</b>\n"
+                    f"{plans.format_limits_summary(tier)}\n\n"
+                    f"Открой /plan чтобы посмотреть остаток лимитов в любой момент."
+                )
+            await _send_safe(bot, telegram_id, text)
+            processed += 1
+        except Exception as e:
+            logger.error(f"poll_lava: process invoice {contract_id} tg={telegram_id} failed: {e}")
+            errors += 1
+
+    if processed or errors:
+        logger.info(f"poll_lava_invoices: processed={processed} skipped={skipped} errors={errors} total={len(items)}")
+
+
 async def process_recurring_payments(bot: Bot) -> None:
     """Создаёт транзакции по всем due-регулярным платежам и переносит next_run_at."""
     from utils.categories import get_category_by_id
@@ -250,6 +332,7 @@ async def scheduler_loop(bot: Bot) -> None:
         try:
             await trial_sweep(bot)
             await process_recurring_payments(bot)
+            await poll_lava_invoices(bot)
             await detect_abuse(bot)
 
             now_utc = datetime.now(timezone.utc)
