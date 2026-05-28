@@ -57,12 +57,32 @@ async def cb_advisor_cancel(callback: CallbackQuery, state: FSMContext):
 @router.message(AdvisorStates.waiting_question)
 async def handle_advisor_question(message: Message, state: FSMContext):
     """Обрабатывает вопрос пользователя — отправляет в Gemini с контекстом трат."""
+    from utils.safety import sanitize_input, detect_injection
     user_id = message.from_user.id
     user = storage.get_or_create_user(
         telegram_id=user_id,
         username=message.from_user.username or "",
         first_name=message.from_user.first_name or "Друг",
     )
+
+    # Защита: длина + keyword-фильтр до проверки лимитов и до похода в Gemini.
+    # Так не тратим квоту юзера на мусорный/вредный запрос.
+    clean_text, truncated = sanitize_input(message.text or "", kind="advisor")
+    if truncated:
+        await message.answer(
+            "Вопрос слишком длинный (>500 символов). Сформулируй короче — "
+            "я отвечу точнее, если вопрос конкретный.",
+            reply_markup=_advisor_cancel_kb(),
+        )
+        return  # state не очищаем — юзер может переформулировать
+    if (matched := detect_injection(clean_text)):
+        storage.log_event(user_id, "suspicious_input", {"kind": "advisor", "matched": matched[:80]})
+        await message.answer(
+            "Я — финансовый помощник и могу отвечать только на вопросы про твои деньги. "
+            "Спроси что-то про свои траты или доходы.",
+            reply_markup=_advisor_cancel_kb(),
+        )
+        return
 
     plan = plans.effective_plan(user)
     limit = plans.limit_for(plan, "ai_question")
@@ -86,7 +106,7 @@ async def handle_advisor_question(message: Message, state: FSMContext):
 
     try:
         answer = await gemini.ask_financial_advisor(
-            user_question=message.text,
+            user_question=clean_text,
             currency=currency,
             transactions=transactions,
         )

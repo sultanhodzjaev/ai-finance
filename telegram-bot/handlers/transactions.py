@@ -125,6 +125,7 @@ def build_confirmation_text(data: dict) -> str:
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text_transaction(message: Message, state: FSMContext):
     """Обрабатывает текстовое сообщение как трату или доход."""
+    from utils.safety import sanitize_input, detect_injection
     current_state = await state.get_state()
     if current_state is not None:
         # Юзер в активном диалоге (но именно его state-handler ничего не ловит — например
@@ -143,6 +144,22 @@ async def handle_text_transaction(message: Message, state: FSMContext):
         first_name=user.first_name or "Друг",
     )
 
+    # Защита от prompt injection и cost runaway: длина + keyword-фильтр.
+    clean_text, truncated = sanitize_input(message.text or "", kind="transaction")
+    if truncated:
+        await message.answer(
+            "Сообщение слишком длинное (>300 символов). Опиши трату короче, "
+            "например «250 кофе» или «потратил 1500 на такси»."
+        )
+        return
+    if (matched := detect_injection(clean_text)):
+        storage.log_event(user.id, "suspicious_input", {"kind": "transaction", "matched": matched[:80]})
+        await message.answer(
+            "Похоже, в сообщении инструкции для AI, а не описание траты. "
+            "Напиши обычным языком — например, «250 кофе»."
+        )
+        return
+
     allowed, deny = _check_action_limit(user.id, "transaction")
     if not allowed:
         await message.answer(deny, parse_mode="HTML")
@@ -151,7 +168,7 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     processing_msg = await message.answer("🤔 Обрабатываю...")
 
     try:
-        result = await gemini.categorize_text_transaction(message.text)
+        result = await gemini.categorize_text_transaction(clean_text)
     except RateLimitError:
         await processing_msg.delete()
         await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")

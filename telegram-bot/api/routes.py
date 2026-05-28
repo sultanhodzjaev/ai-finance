@@ -253,14 +253,23 @@ async def list_transactions(
 @router.post("/transactions")
 async def create_transaction(payload: dict, x_init_data: str = Header(...)):
     """Создать транзакцию из Mini App (без AI)."""
+    from utils.safety import sanitize_input, detect_injection
+    from services.storage import log_event
     telegram_id = require_auth(x_init_data)
     ensure_user(x_init_data, telegram_id)
+    # Описание может попасть в weekly_summary как контекст для Gemini —
+    # обрезаем длину и логируем подозрительные паттерны.
+    raw_desc = payload.get("description", "") or ""
+    desc, _ = sanitize_input(raw_desc, kind="description")
+    if (matched := detect_injection(desc)):
+        log_event(telegram_id, "suspicious_input", {"kind": "tx_description", "matched": matched[:80]})
+        raise HTTPException(status_code=400, detail="invalid description")
     tx = {
         "id":          str(uuid.uuid4()),
         "type":        payload.get("type", "expense"),
         "amount":      float(payload["amount"]),
         "category":    payload.get("category", "other"),
-        "description": payload.get("description", ""),
+        "description": desc,
         "merchant":    None,
         "datetime":    datetime.now().isoformat(),
         "source":      "miniapp",
