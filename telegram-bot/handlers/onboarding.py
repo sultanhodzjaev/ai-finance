@@ -213,12 +213,20 @@ async def cb_open_settings(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "show_plan")
 async def cb_show_plan(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    from handlers.plan import build_plan_text
+    from handlers.plan import build_plan_text, _upgrade_keyboard
+    from services import plans, storage
     text = build_plan_text(callback.from_user.id)
     if text is None:
         await callback.message.answer("Сначала нажми /start — я тебя ещё не вижу в базе.")
     else:
-        await callback.message.answer(text, parse_mode="HTML")
+        # Inline-кнопки апгрейда — те же что в cmd_plan/legacy_plan,
+        # чтобы юзеру было одинаково независимо от точки входа.
+        user = storage.get_user(callback.from_user.id) or {}
+        current_plan = plans.effective_plan(user)
+        kb = None
+        if current_plan in (plans.PLAN_TRIAL, plans.PLAN_FREE, plans.PLAN_PREMIUM):
+            kb = _upgrade_keyboard(current_plan)
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
