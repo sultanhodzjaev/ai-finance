@@ -81,11 +81,26 @@ async def lava_webhook(request: Request) -> JSONResponse:
         "parent_contract_id": body.get("parentContractId"),
     })
 
+    # Идемпотентность для платёжных событий: Lava ретраит при наших 5xx / сетевых
+    # ошибках. Без guard'а повторный webhook → второй activate_subscription →
+    # +30 дней «бесплатно» (с точки зрения юзера) или путаница в нашем учёте.
+    # Cancelled/failed события идемпотентность не требуют — они просто шлют пуш
+    # или обновляют срок действия, повторное выполнение безопасно.
+    PAYMENT_EVENTS = ("payment.success", "subscription.recurring.payment.success")
+    if event in PAYMENT_EVENTS and contract_id:
+        if storage.has_lava_event_processed(contract_id, event):
+            logger.info("lava webhook duplicate skipped: event=%s contract=%s tg=%s",
+                        event, contract_id, telegram_id)
+            return JSONResponse({"ok": True, "duplicate": True})
+
     if event == "payment.success" and status == "subscription-active":
         if not tier:
             logger.warning("lava webhook payment.success: unknown tier for amount=%s tg=%s", amount, telegram_id)
             return JSONResponse({"ok": True})
         storage.activate_subscription(telegram_id, tier, days=30)
+        storage.log_event(telegram_id, "lava_processed", {
+            "contract_id": contract_id, "event": event, "tier": tier, "amount": amount_int,
+        })
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🎉 <b>Подписка {title} активирована!</b>\n\n"
@@ -101,6 +116,9 @@ async def lava_webhook(request: Request) -> JSONResponse:
             logger.warning("lava webhook recurring: unknown tier for amount=%s tg=%s", amount, telegram_id)
             return JSONResponse({"ok": True})
         storage.activate_subscription(telegram_id, tier, days=30)
+        storage.log_event(telegram_id, "lava_processed", {
+            "contract_id": contract_id, "event": event, "tier": tier, "amount": amount_int,
+        })
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🔄 <b>Подписка {title} продлена на 30 дней.</b>\n"
