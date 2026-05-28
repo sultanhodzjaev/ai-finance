@@ -310,6 +310,9 @@ function buildNav() {
     const d = state.screen === 'dashboard',
           h = state.screen === 'history',
           p = state.screen === 'plan' || state.screen === 'upgrade';
+    // FAB-кнопка «+» абсолютно центрирована в nav и приподнята над ней.
+    // Между History и Plan кладём spacer той же ширины, что и FAB, чтобы текст
+    // соседних кнопок не уезжал под него на узких экранах.
     return `
         <nav class="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-100
                     flex items-center justify-around px-1 py-1 z-40 shadow-lg"
@@ -322,15 +325,19 @@ function buildNav() {
                            ${h ? 'text-indigo-600' : 'text-gray-400'}" data-screen="history">
                 ${icon('clock', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">История</span>
             </button>
-            <button class="nav-btn flex flex-col items-center py-1 px-3" data-screen="add">
-                <span class="bg-indigo-600 text-white rounded-full w-12 h-12
-                             flex items-center justify-center shadow-md">
-                    ${icon('plus', 'w-6 h-6')}
-                </span>
-            </button>
+            <div aria-hidden="true" class="w-16 h-1"></div>
             <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
                            ${p ? 'text-indigo-600' : 'text-gray-400'}" data-screen="plan">
                 ${icon('crown', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">План</span>
+            </button>
+            <button class="nav-btn absolute left-1/2 -translate-x-1/2 -top-7"
+                    data-screen="add" aria-label="Добавить трату или доход"
+                    style="filter:drop-shadow(0 6px 14px rgba(99,102,241,0.45))">
+                <span class="rounded-full w-16 h-16 flex items-center justify-center text-white
+                             ring-4 ring-white dark:ring-[#0b0b14] active:scale-95 transition-transform"
+                      style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                    ${icon('plus', 'w-7 h-7')}
+                </span>
             </button>
         </nav>`;
 }
