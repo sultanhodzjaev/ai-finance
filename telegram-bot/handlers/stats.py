@@ -8,6 +8,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKe
 from services import plans, storage
 from utils.categories import get_category, get_category_by_id
 from utils.formatters import format_amount, format_date
+from utils.streak import compute_streak_days, format_streak
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -59,9 +60,14 @@ async def cmd_today(event: Message | CallbackQuery):
         if _safe_date(t) == today
     ]
 
+    streak = compute_streak_days(transactions, today=today)
+    streak_line = format_streak(streak, today_logged=bool(today_txs))
+
     if not today_txs:
+        # Если есть streak — подталкиваем не потерять его сегодня; иначе обычный текст.
+        hint = streak_line if streak_line else "Так держать или забыл записать? 😄"
         await send(
-            "Сегодня ты ещё ничего не записал. Так держать или забыл записать? 😄",
+            f"Сегодня ты ещё ничего не записал.\n{hint}",
             reply_markup=_switch_month_kb(),
         )
         return
@@ -98,6 +104,8 @@ async def cmd_today(event: Message | CallbackQuery):
     sign = "+" if balance >= 0 else ""
     emoji = "✅" if balance >= 0 else "⚠️"
     lines.append(f"{emoji} Остаток за день: {sign}{format_amount(balance, currency)}")
+    if streak_line:
+        lines.append(streak_line)
 
     await send("\n".join(lines), reply_markup=_switch_month_kb())
 
@@ -120,10 +128,14 @@ async def cmd_stats(event: Message | CallbackQuery):
     currency = user.get("currency", "KGS")
 
     now = datetime.now()
+    today_d = date.today()
     month_txs = [
         t for t in transactions
         if _safe_dt(t).month == now.month and _safe_dt(t).year == now.year
     ]
+    streak = compute_streak_days(transactions, today=today_d)
+    today_logged = any(_safe_date(t) == today_d for t in transactions)
+    streak_line = format_streak(streak, today_logged=today_logged)
 
     if not month_txs:
         await send(
@@ -180,6 +192,8 @@ async def cmd_stats(event: Message | CallbackQuery):
     if expenses:
         lines.append(f"📈 Среднее в день (расходы): {format_amount(avg_per_day, currency)}")
     lines.append(f"🔢 Транзакций: {len(month_txs)}")
+    if streak_line:
+        lines.append(streak_line)
 
     await send("\n".join(lines), reply_markup=_switch_today_kb())
 
