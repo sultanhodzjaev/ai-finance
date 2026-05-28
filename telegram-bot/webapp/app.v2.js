@@ -1588,7 +1588,7 @@ function attachSettingsHandlers() {
             else if (action === 'settings_currency')  { openCurrencyPicker(); }
             else if (action === 'settings_invite')    { goTo('invite'); }
             else if (action === 'settings_help')      { goTo('help'); }
-            else if (action === 'settings_categories'){ state.customCategories = null; goTo('categories'); }
+            else if (action === 'settings_categories'){ goTo('categories'); }
             else if (action === 'settings_recurring') { state.recurringList = null; goTo('recurring'); }
         });
     });
@@ -1817,50 +1817,54 @@ function attachHelpHandlers() {
 const EMOJI_CHOICES = ['🛒','🍔','🚗','🏠','💊','🎬','🎓','🐶','💰','✈️','📱','📌','💡','🎁','📦','💼','💻','📈','📊'];
 
 function buildCategories() {
-    if (state.customCategories === null || state.customCategories === undefined) {
-        (async () => {
-            try {
-                const res = await api('GET', '/me/categories');
-                state.customCategories = res.categories || [];
-                render();
-            } catch (e) { state.customCategories = []; render(); }
-        })();
+    // state.expenseCategories/incomeCategories грузятся при загрузке приложения
+    // (см. inflateData) и уже содержат базовые + кастомные с флагом `custom: true`.
+    // Не делаем отдельный fetch — переиспользуем тот же источник правды.
+    if (!state.expenseCategories || !state.incomeCategories) {
         return `<div class="px-4 pt-6 text-gray-500">Загружаю...</div>`;
     }
 
-    const cats = state.customCategories;
-    const empty = !cats.length;
-    return `
-        <div class="px-4 pt-5 pb-6">
-            <h1 class="h-display mb-2">Кастомные категории</h1>
-            <p class="text-[13px] mb-5" style="color:var(--text-muted)">
-                Свои категории показываются в Mini App-дашборде и графиках. В чат-боте при
-                записи трат используется основной набор — для совместимости с AI.
-            </p>
+    const exp = state.expenseCategories;
+    const inc = state.incomeCategories;
+    const customCount = exp.filter(c => c.custom).length + inc.filter(c => c.custom).length;
 
-            ${empty ? `
-                <div class="rounded-2xl p-6 text-center" style="background:var(--surface);border:1px solid var(--border)">
-                    <p class="text-[15px] mb-1" style="color:var(--text)">Пока нет своих категорий</p>
-                    <p class="text-[13px]" style="color:var(--text-muted)">Создай первую — она появится в графиках Mini App.</p>
-                </div>
-            ` : `
-                <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
-                     style="background:var(--surface);border:1px solid var(--border)">
-                    ${cats.map(c => `
-                        <div class="flex items-center gap-3 px-4 py-3">
-                            <span class="text-xl">${c.emoji || '📦'}</span>
-                            <div class="flex-1 min-w-0">
-                                <p class="text-[14px] font-medium truncate" style="color:var(--text)">${c.name}</p>
-                                <p class="text-[11px]" style="color:var(--text-faint)">${c.type === 'income' ? 'Доход' : 'Расход'}</p>
-                            </div>
-                            <button class="cat-delete-btn p-2 rounded-lg" data-cat-id="${c.id}"
-                                    style="color:var(--negative);background:rgba(244,63,94,0.08)">
-                                ${icon('trash-2', 'w-4 h-4')}
-                            </button>
-                        </div>
-                    `).join('')}
-                </div>
-            `}
+    const renderRow = (c) => `
+        <div class="flex items-center gap-3 px-4 py-3">
+            <span class="text-xl">${c.emoji || '📦'}</span>
+            <div class="flex-1 min-w-0">
+                <p class="text-[14px] font-medium truncate" style="color:var(--text)">${c.name}</p>
+                ${c.custom ? '' : `<p class="text-[11px]" style="color:var(--text-faint)">Базовая</p>`}
+            </div>
+            ${c.custom ? `
+                <button class="cat-delete-btn p-2 rounded-lg" data-cat-id="${c.id}"
+                        style="color:var(--negative);background:rgba(244,63,94,0.08)">
+                    ${icon('trash-2', 'w-4 h-4')}
+                </button>
+            ` : ''}
+        </div>`;
+
+    const renderSection = (title, items) => `
+        <h2 class="eyebrow mt-5 mb-2">${title}</h2>
+        <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
+             style="background:var(--surface);border:1px solid var(--border)">
+            ${items.map(renderRow).join('')}
+        </div>`;
+
+    return `
+        <div class="px-4 pt-5 pb-24">
+            <h1 class="h-display mb-2">Категории</h1>
+            <p class="text-[13px] mb-1" style="color:var(--text-muted)">
+                Базовый набор работает с AI в чат-боте, удалять его нельзя. Свои категории
+                показываются в Mini App-дашборде и графиках; их можно добавлять и удалять.
+            </p>
+            ${customCount === 0 ? `
+                <p class="text-[12px] mt-2" style="color:var(--text-faint)">
+                    Пока своих категорий нет — добавь первую кнопкой ниже.
+                </p>
+            ` : ''}
+
+            ${exp.length ? renderSection('Расходы', exp) : ''}
+            ${inc.length ? renderSection('Доходы',  inc) : ''}
 
             <button id="cat-add-btn"
                     class="fixed right-4 bottom-24 px-5 py-3 rounded-full text-white font-semibold text-[14px]
@@ -1949,7 +1953,17 @@ function attachCategoriesHandlers() {
             if (!await confirm('Удалить категорию?')) return;
             try {
                 await api('DELETE', `/me/categories/${id}`);
-                state.customCategories = state.customCategories.filter(c => c.id !== id);
+                // Удаляем из всех трёх кэшей: customCategories для других экранов
+                // (recurring form, findCategoryById), и из expense/income — для этого экрана.
+                if (state.customCategories) {
+                    state.customCategories = state.customCategories.filter(c => c.id !== id);
+                }
+                if (state.expenseCategories) {
+                    state.expenseCategories = state.expenseCategories.filter(c => c.id !== id);
+                }
+                if (state.incomeCategories) {
+                    state.incomeCategories  = state.incomeCategories.filter(c => c.id !== id);
+                }
                 render();
                 tg?.HapticFeedback?.notificationOccurred?.('success');
             } catch (e) {
@@ -1987,7 +2001,15 @@ function attachCategoryFormHandlers() {
             const res = await api('POST', '/me/categories', {
                 name: f.name.trim(), emoji: f.emoji, type: f.type,
             });
+            // Добавляем во все три кэша: customCategories — для recurring/findCategoryById,
+            // expense/income — для отображения на экране категорий + пикеров новых трат.
+            const newCat = { ...res.category, custom: true };
             state.customCategories = [...(state.customCategories || []), res.category];
+            if (newCat.type === 'income') {
+                state.incomeCategories = [...(state.incomeCategories || []), newCat];
+            } else {
+                state.expenseCategories = [...(state.expenseCategories || []), newCat];
+            }
             state.catFormOpen = false;
             render();
             const tg = window.Telegram?.WebApp;
