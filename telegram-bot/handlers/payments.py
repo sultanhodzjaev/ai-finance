@@ -48,13 +48,18 @@ async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
         "tier": tier, "contract_id": contract_id, "amount_usd": price,
     })
 
+    # Перед чекаутом показываем что входит в тариф — иначе юзер видит только
+    # «оплати $5/мес» и не понимает за что платит.
+    from handlers.plan import _build_tier_summary
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💳 Оплатить ${price}/мес", url=payment_url)],
     ])
     await callback.message.answer(
-        f"💫 <b>{title} — ${price}/мес</b>\n\n"
-        f"Жми кнопку ниже, оплати картой — после оплаты бот сам активирует подписку. "
-        f"Списание происходит каждый месяц автоматически, можно отменить в любой момент.",
+        f"{_build_tier_summary(tier)}\n\n"
+        f"Жми кнопку ниже, оплати картой — после оплаты бот сам активирует "
+        f"подписку. Списание каждый месяц автоматически, можно отменить в "
+        f"любой момент.",
         parse_mode="HTML",
         reply_markup=kb,
     )
