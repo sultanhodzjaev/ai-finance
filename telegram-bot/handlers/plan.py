@@ -62,17 +62,23 @@ def _used_for(action: str, telegram_id: int) -> int:
     return 0
 
 
-def _upgrade_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+def _upgrade_keyboard(current_plan: str) -> InlineKeyboardMarkup:
+    """Кнопки покупки. Скрываем кнопку плана, который у юзера уже активен —
+    иначе клик на «свой» план сделает в Lava вторую параллельную подписку
+    (двойное автосписание). На Pro кнопок нет вообще: апгрейдиться некуда,
+    автопродление работает само."""
+    rows = []
+    if current_plan != plans.PLAN_PREMIUM and current_plan != plans.PLAN_PRO:
+        rows.append([InlineKeyboardButton(
             text=f"💎 Premium — ${plans.PRICE_USD[plans.PLAN_PREMIUM]}/мес",
             callback_data="upgrade_premium",
-        )],
-        [InlineKeyboardButton(
+        )])
+    if current_plan != plans.PLAN_PRO:
+        rows.append([InlineKeyboardButton(
             text=f"🚀 Pro — ${plans.PRICE_USD[plans.PLAN_PRO]}/мес",
             callback_data="upgrade_pro",
-        )],
-    ])
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_plan_text(user_id: int) -> str | None:
@@ -160,13 +166,52 @@ def _build_tier_summary(plan: str) -> str:
 
 @router.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
-    """Показывает варианты подписки. Тексты тарифов формируются из LIMITS."""
+    """Показывает варианты подписки. Тексты тарифов формируются из LIMITS.
+    Юзеру не предлагаем покупать тариф который у него уже активен."""
     storage.log_event(message.from_user.id, "upgrade_clicked", {"source": "command"})
+    user = storage.get_user(message.from_user.id) or {}
+    current_plan = plans.effective_plan(user)
+
+    if current_plan == plans.PLAN_OWNER:
+        await message.answer(
+            "👑 У тебя <b>Owner</b> — безлимитный доступ ко всем функциям. "
+            "Подписку покупать не нужно.",
+            parse_mode="HTML",
+        )
+        return
+
+    if current_plan == plans.PLAN_PRO:
+        await message.answer(
+            "🚀 У тебя уже <b>Pro</b> — это топовый тариф, выше нечего "
+            "покупать.\n\n"
+            f"{_build_tier_summary(plans.PLAN_PRO)}\n\n"
+            "Подписка автопродлевается каждый месяц через Lava, отменить можно "
+            "в любой момент через ссылку в письме от Lava.",
+            parse_mode="HTML",
+        )
+        return
+
+    parts = ["💳 <b>Подписка AI-Финансист</b>", ""]
+    if current_plan == plans.PLAN_PREMIUM:
+        parts += [
+            "✅ У тебя сейчас <b>Premium</b>. Если хочешь больше лимитов — "
+            "доступен апгрейд до Pro:",
+            "",
+            _build_tier_summary(plans.PLAN_PRO),
+        ]
+    else:
+        parts += [
+            _build_tier_summary(plans.PLAN_PREMIUM),
+            "",
+            _build_tier_summary(plans.PLAN_PRO),
+        ]
+    parts.append(
+        "\n💳 Оплата картой через Lava.top. Подписка автопродлевается "
+        "каждый месяц, можно отменить в любой момент."
+    )
+
     await message.answer(
-        "💳 <b>Подписка AI-Финансист</b>\n\n"
-        f"{_build_tier_summary(plans.PLAN_PREMIUM)}\n\n"
-        f"{_build_tier_summary(plans.PLAN_PRO)}\n\n"
-        "💳 Оплата картой через Lava.top. Подписка автопродлевается каждый месяц, можно отменить в любой момент.",
+        "\n".join(parts),
         parse_mode="HTML",
-        reply_markup=_upgrade_keyboard(),
+        reply_markup=_upgrade_keyboard(current_plan),
     )
