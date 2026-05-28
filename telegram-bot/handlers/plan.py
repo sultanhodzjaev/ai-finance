@@ -84,6 +84,14 @@ def build_plan_text(user_id: int) -> str | None:
     plan = plans.effective_plan(user)
     title = plans.PLAN_TITLE.get(plan, plan)
 
+    # Owner — allowlist-юзер с безлимитом, лимиты ему показывать бессмысленно.
+    if plan == plans.PLAN_OWNER:
+        return (
+            f"👑 <b>Твой план: Owner</b>\n"
+            f"♾️ Безлимитный доступ ко всем функциям бота.\n\n"
+            f"Этот режим выдаётся вручную через allowlist (OWNER_TELEGRAM_IDS)."
+        )
+
     if plan == plans.PLAN_TRIAL:
         time_line = f"⏳ До конца триала: <b>{_fmt_remaining(user.get('trial_until'))}</b>"
     elif plan in (plans.PLAN_PREMIUM, plans.PLAN_PRO):
