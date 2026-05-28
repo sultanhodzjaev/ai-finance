@@ -160,8 +160,21 @@ async def cb_change_currency(callback: CallbackQuery):
 
 @router.callback_query(F.data == "show_subscription")
 async def cb_show_subscription(callback: CallbackQuery):
-    # Просто триггерим /plan-обработчик через bot.send_message — там вся логика
-    await callback.message.answer("Открой /plan чтобы увидеть подробности и продлить подписку.")
+    """Показывает текущий план + кнопки апгрейда (если юзер не на платном тарифе)."""
+    from handlers.plan import build_plan_text, _upgrade_keyboard
+    text = build_plan_text(callback.from_user.id)
+    if text is None:
+        await callback.message.answer("Сначала нажми /start.")
+        await callback.answer()
+        return
+
+    user = storage.get_user(callback.from_user.id) or {}
+    plan = plans.effective_plan(user)
+    # Кнопки апгрейда показываем всем кроме Pro и Owner (тем некуда расти).
+    if plan in (plans.PLAN_FREE, plans.PLAN_TRIAL, plans.PLAN_PREMIUM):
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=_upgrade_keyboard())
+    else:
+        await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
