@@ -17,7 +17,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand
 
-from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals, categories, recurring, onboarding
+from handlers import start, transactions, stats, ai_advisor, plan, payments, referrals, categories, recurring, onboarding, external_verify
 from handlers import admin as admin_handlers
 from middleware import BanAndFloodMiddleware
 from api.server import app as fastapi_app
@@ -64,6 +64,7 @@ async def run_bot():
     # admin — рано, чтобы /ban /unban /admin_stats не съел кто-то ниже.
     dp.include_router(payments.router)
     dp.include_router(admin_handlers.router)
+    dp.include_router(external_verify.router)
     dp.include_router(start.router)
     dp.include_router(onboarding.router)
     dp.include_router(referrals.router)
