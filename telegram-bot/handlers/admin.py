@@ -1,12 +1,13 @@
-"""Админ-команды: /ban, /unban, /admin_stats. Только для владельца бота."""
+"""Админ-команды: /ban, /unban, /admin_stats, /setplan. Только для владельца бота."""
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from services import storage
+from services import storage, plans
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -63,6 +64,77 @@ async def cmd_unban(message: Message):
         await message.answer(f"Юзер <code>{uid}</code> разбанен.", parse_mode="HTML")
     else:
         await message.answer("Такого юзера в бан-списке не было.")
+
+
+@router.message(Command("setplan"))
+async def cmd_setplan(message: Message):
+    """Сменить план себе или другому юзеру.
+    Формат: /setplan <plan> [days] [user_id]
+      plan: trial | free | premium | pro
+      days: сколько дней действует (для trial → trial_until; для premium/pro → subscription_until). По умолчанию 7.
+      user_id: если не указан — себе.
+    Примеры:
+      /setplan trial          — Trial на 7 дней себе
+      /setplan free           — Free сразу (no expiry)
+      /setplan premium 30     — Premium на 30 дней себе
+      /setplan pro 7 12345    — Pro на 7 дней для юзера 12345
+    """
+    if not _is_admin(message):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(
+            "Формат: <code>/setplan &lt;trial|free|premium|pro&gt; [days] [user_id]</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    plan = parts[1].lower()
+    allowed_plans = {plans.PLAN_TRIAL, plans.PLAN_FREE, plans.PLAN_PREMIUM, plans.PLAN_PRO}
+    if plan not in allowed_plans:
+        await message.answer(f"План должен быть один из: {', '.join(sorted(allowed_plans))}.")
+        return
+
+    try:
+        days = int(parts[2]) if len(parts) >= 3 else 7
+    except ValueError:
+        await message.answer("days должно быть числом.")
+        return
+
+    try:
+        target_uid = int(parts[3]) if len(parts) >= 4 else message.from_user.id
+    except ValueError:
+        await message.answer("user_id должен быть числом.")
+        return
+
+    until = datetime.now(timezone.utc) + timedelta(days=days)
+    if plan == plans.PLAN_TRIAL:
+        storage.update_user_plan(target_uid, plan, trial_until=until)
+        status = f"Trial до {until.strftime('%Y-%m-%d %H:%M UTC')}"
+    elif plan == plans.PLAN_FREE:
+        storage.update_user_plan(target_uid, plan)
+        status = "Free (без срока)"
+    else:
+        storage.update_user_plan(target_uid, plan, subscription_until=until)
+        status = f"{plans.PLAN_TITLE.get(plan, plan)} до {until.strftime('%Y-%m-%d %H:%M UTC')}"
+
+    # Если меняем СЕБЕ и сейчас сидим в Owner-allowlist — напомним что для теста
+    # надо ещё указать OWNER_DISABLED_TELEGRAM_IDS в env, иначе всё перекроется.
+    note = ""
+    if (target_uid == message.from_user.id and
+            target_uid in plans.OWNER_TELEGRAM_IDS and
+            target_uid not in plans._OWNER_DISABLED_TELEGRAM_IDS):
+        note = (
+            "\n\n⚠️ Ты сейчас в OWNER-allowlist — effective_plan всё равно вернёт Owner.\n"
+            "Чтобы тестировать как обычный юзер, добавь в .env:\n"
+            f"<code>OWNER_DISABLED_TELEGRAM_IDS={target_uid}</code>\n"
+            "и перезапусти бота."
+        )
+
+    await message.answer(
+        f"✅ План для <code>{target_uid}</code>: <b>{status}</b>{note}",
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("admin_stats"))

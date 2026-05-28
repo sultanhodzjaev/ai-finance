@@ -20,6 +20,13 @@ PLAN_OWNER = "owner"
 # Юзеры с безлимитным доступом. Username приходит без @.
 OWNER_USERNAMES: set[str] = {"sultanhodzjaevv", "aidar_ed"}
 OWNER_TELEGRAM_IDS: set[int] = {5557488294}
+
+# Чтобы временно «снять» Owner-режим с конкретного юзера для тестирования —
+# добавить его telegram_id в env OWNER_DISABLED_TELEGRAM_IDS (через запятую).
+import os as _os
+_OWNER_DISABLED_TELEGRAM_IDS: set[int] = {
+    int(x) for x in (_os.getenv("OWNER_DISABLED_TELEGRAM_IDS") or "").split(",") if x.strip().isdigit()
+}
 PLAN_PRO     = "pro"
 
 # Действия с runtime-проверкой лимита. Остальные параметры декларативны.
@@ -150,7 +157,8 @@ def effective_plan(user: dict) -> str:
     u = user or {}
     uname = (u.get("username") or "").lstrip("@").lower()
     tg_id = u.get("telegram_id")
-    if uname in OWNER_USERNAMES or tg_id in OWNER_TELEGRAM_IDS:
+    is_owner_allowlist = (uname in OWNER_USERNAMES or tg_id in OWNER_TELEGRAM_IDS)
+    if is_owner_allowlist and tg_id not in _OWNER_DISABLED_TELEGRAM_IDS:
         return PLAN_OWNER
     plan = u.get("plan") or PLAN_TRIAL
 
