@@ -1158,11 +1158,14 @@ function attachEditHandlers() {
 // ============================================================
 // ТАРИФЫ И ПЛАН
 // ============================================================
+// TODO: subtitle для premium/pro лучше брать из state.plan.pricing (API уже отдаёт
+// `pricing.premium.usd` и `pricing.pro.usd`), а не дублировать число здесь —
+// иначе при смене цены в plans.py нужно помнить про два места и легко разойтись.
 const PLAN_VISUAL = {
     trial:   { iconName: 'sparkles', title: 'Trial',   subtitle: 'Полная пробная неделя' },
     free:    { iconName: 'circle',   title: 'Free',    subtitle: 'Бесплатно навсегда' },
-    premium: { iconName: 'gem',      title: 'Premium', subtitle: '$7 в месяц' },
-    pro:     { iconName: 'crown',    title: 'Pro',     subtitle: '$15 в месяц' },
+    premium: { iconName: 'gem',      title: 'Premium', subtitle: '$5 в месяц' },
+    pro:     { iconName: 'crown',    title: 'Pro',     subtitle: '$10 в месяц' },
     owner:   { iconName: 'crown',    title: 'Owner',   subtitle: 'Безлимитный доступ' },
 };
 
