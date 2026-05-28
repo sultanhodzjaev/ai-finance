@@ -1,18 +1,31 @@
 """Онбординг: выбор валюты, объяснение Trial, настройки."""
 import logging
+import os
 
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove, WebAppInfo,
 )
 
 from services import storage, plans
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+def _webapp_url() -> str:
+    """URL Mini App — WEBAPP_URL или вычисление из REPLIT_DOMAINS."""
+    explicit = os.getenv("WEBAPP_URL", "")
+    if explicit:
+        return explicit
+    domains = os.getenv("REPLIT_DOMAINS", "")
+    if domains:
+        first = domains.split(",")[0].strip()
+        return f"https://{first}/miniapp"
+    return ""
 
 
 @router.message(Command("cancel"))
@@ -53,7 +66,12 @@ def currency_picker_kb() -> InlineKeyboardMarkup:
 
 def main_inline_kb() -> InlineKeyboardMarkup:
     """Главное меню — inline-кнопки прямо под сообщением бота."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows: list[list[InlineKeyboardButton]] = []
+    url = _webapp_url()
+    if url:
+        # Mini App-кнопка на всю ширину — первая, чтобы юзер сразу видел вход в дашборд.
+        rows.append([InlineKeyboardButton(text="📲 Открыть приложение", web_app=WebAppInfo(url=url))])
+    rows += [
         [
             InlineKeyboardButton(text="📊 План",       callback_data="show_plan"),
             InlineKeyboardButton(text="📈 Статистика", callback_data="show_stats"),
@@ -62,7 +80,9 @@ def main_inline_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🤖 AI-финансист", callback_data="ask_advisor"),
             InlineKeyboardButton(text="⚙️ Настройки",    callback_data="open_settings"),
         ],
-    ])
+        [InlineKeyboardButton(text="🎁 Пригласить друга +14 дней Premium", callback_data="show_invite")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def settings_kb() -> InlineKeyboardMarkup:
