@@ -49,6 +49,28 @@ def verify_webhook_signature(received_key: str) -> bool:
     return hmac.compare_digest(received_key, secret)
 
 
+async def list_recent_invoices(size: int = 50) -> list[dict[str, Any]]:
+    """Возвращает последние N инвойсов из Lava (по убыванию даты создания).
+    Используется polling-таской — Lava webhook'и для Public API не доставляются
+    надёжно (это известный баг, подтверждён на flowo-academy)."""
+    api_key = _api_key()
+    if not api_key:
+        logger.error("list_recent_invoices: LAVA_API_KEY не задан")
+        return []
+    headers = {"X-Api-Key": api_key, "Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{LAVA_BASE_URL}/api/v2/invoices?size={int(size)}", headers=headers)
+        if not r.is_success:
+            logger.warning("lava list_recent_invoices: HTTP %s — %s", r.status_code, r.text[:300])
+            return []
+        data = r.json()
+        return list(data.get("items") or [])
+    except Exception as e:
+        logger.exception("lava list_recent_invoices failed: %s", e)
+        return []
+
+
 async def create_subscription(
     *,
     telegram_id: int,

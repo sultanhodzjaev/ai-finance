@@ -382,11 +382,13 @@ def count_events_this_month(telegram_id: int, event_type: str) -> int:
         return 0
 
 
-def activate_subscription(telegram_id: int, plan: str, days: int = 30) -> dict | None:
+def activate_subscription(telegram_id: int, plan: str, days: int = 30, contract_id: str | None = None) -> dict | None:
     """
     Активирует подписку: ставит plan, продлевает subscription_until на `days`
     от ТЕКУЩЕГО значения (если оно ещё в будущем) или от сейчас. Возвращает
     обновлённого пользователя.
+    contract_id попадает в metadata события subscription_paid и используется
+    polling-таской для идемпотентности (не активируем один и тот же инвойс дважды).
     """
     from datetime import timedelta
     user = get_user(telegram_id) or {}
@@ -406,11 +408,35 @@ def activate_subscription(telegram_id: int, plan: str, days: int = 30) -> dict |
     patch = {"plan": plan, "subscription_until": new_until.isoformat()}
     try:
         res = _client().table("users").update(patch).eq("telegram_id", telegram_id).execute()
-        log_event(telegram_id, "subscription_paid", {"plan": plan, "days": days, "until": new_until.isoformat()})
+        meta = {"plan": plan, "days": days, "until": new_until.isoformat()}
+        if contract_id:
+            meta["contract_id"] = str(contract_id)
+        log_event(telegram_id, "subscription_paid", meta)
         return (res.data or [None])[0]
     except Exception as e:
         logger.error(f"activate_subscription({telegram_id}, {plan}): {e}")
         return None
+
+
+def has_processed_invoice(contract_id: str) -> bool:
+    """Был ли уже обработан Lava-инвойс с этим contract_id?
+    Используется polling-таской для идемпотентности — отслеживается через
+    subscription_paid event с contract_id в metadata.
+    Тип события subscription_paid точно в whitelist events_type_check
+    (в отличие от lava_processed/lava_webhook которые constraint режет)."""
+    if not contract_id:
+        return False
+    try:
+        res = (
+            _client().table("events").select("id")
+            .eq("type", "subscription_paid")
+            .filter("metadata->>contract_id", "eq", str(contract_id))
+            .limit(1).execute()
+        )
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"has_processed_invoice({contract_id}): {e}")
+        return False
 
 
 def get_user_by_referral_code(code: str) -> dict | None:
