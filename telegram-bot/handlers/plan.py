@@ -123,23 +123,28 @@ def build_plan_text(user_id: int) -> str | None:
         f"<b>Лимиты:</b>\n"
         f"{_line('Записи трат', 'transaction')}\n"
         f"{_line('Фото чеков', 'photo')}\n"
-        f"{_line('Вопросов финансисту', 'ai_question')}\n"
+        f"{_line('Вопросов финансисту', 'ai_question')}"
     )
-    if plan in (plans.PLAN_FREE, plans.PLAN_TRIAL):
-        text += "\nЧтобы снять ограничения — /upgrade"
-    elif plan == plans.PLAN_PREMIUM:
-        text += "\nХочешь больше лимитов? Pro — /upgrade"
+    # CTA на апгрейд теперь живёт в inline-кнопках под сообщением (см. cmd_plan),
+    # а не в текстовой строке «/upgrade». Здесь только лимиты.
     return text
 
 
 @router.message(Command("plan"))
 async def cmd_plan(message: Message):
-    """Показывает текущий план юзера и его лимиты."""
+    """Показывает текущий план юзера, лимиты и inline-кнопки на апгрейд
+    (релевантные текущему тарифу: Trial/Free → Premium + Pro; Premium → Pro;
+    Pro/Owner → без кнопок)."""
     text = build_plan_text(message.from_user.id)
     if text is None:
         await message.answer("Сначала нажми /start — я тебя ещё не вижу в базе.")
         return
-    await message.answer(text, parse_mode="HTML")
+    user = storage.get_user(message.from_user.id) or {}
+    current_plan = plans.effective_plan(user)
+    keyboard = None
+    if current_plan in (plans.PLAN_TRIAL, plans.PLAN_FREE, plans.PLAN_PREMIUM):
+        keyboard = _upgrade_keyboard(current_plan)
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 def _build_tier_summary(plan: str) -> str:
