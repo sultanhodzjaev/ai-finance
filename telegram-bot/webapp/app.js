@@ -1783,15 +1783,31 @@ function buildHelp() {
                 </p>
             </div>
 
-            <p class="text-[12px] text-center mt-5" style="color:var(--text-faint)">
-                Вопросы — @sultanhodzjaevv
-            </p>
+            <div class="rounded-2xl p-5 mt-4" style="background:var(--accent-soft);border:1px solid var(--border)">
+                <p class="text-[14px] mb-1" style="color:var(--text)"><b>Идеи, баги, фичи?</b></p>
+                <p class="text-[13px] mb-3" style="color:var(--text-muted)">
+                    Напиши мне напрямую — отвечаю на все сообщения. Если что-то не работает
+                    или хочется новую функцию, пиши в любой момент.
+                </p>
+                <button id="help-contact-btn"
+                        class="w-full py-3 rounded-xl text-white font-semibold text-[14px]
+                               flex items-center justify-center gap-2 active:scale-95 transition"
+                        style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                    ${icon('message-circle', 'w-4 h-4')} Написать @sultanhodzjaevv
+                </button>
+            </div>
         </div>`;
 }
 
 function attachHelpHandlers() {
     document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
         el.addEventListener('click', () => goBack()));
+    document.getElementById('help-contact-btn')?.addEventListener('click', () => {
+        const tg = window.Telegram?.WebApp;
+        // openTelegramLink не закрывает Mini App, открывает чат в том же TG-клиенте.
+        if (tg?.openTelegramLink) tg.openTelegramLink('https://t.me/sultanhodzjaevv');
+        else window.open('https://t.me/sultanhodzjaevv', '_blank');
+    });
 }
 
 
