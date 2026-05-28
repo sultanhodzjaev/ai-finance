@@ -113,8 +113,12 @@ async def lava_webhook(request: Request) -> JSONResponse:
         will_expire = _parse_iso(body.get("willExpireAt"))
         if will_expire and tier:
             storage.update_user_plan(telegram_id, tier, subscription_until=will_expire)
+        if will_expire:
+            expire_line = f"Доступ сохраняется до <b>{will_expire.strftime('%Y-%m-%d')}</b>.\n"
+        else:
+            expire_line = "Доступ сохраняется до конца оплаченного периода.\n"
         await _notify(bot, telegram_id,
-                      "🚫 Подписка отменена. Доступ сохраняется до конца оплаченного периода.\n"
+                      f"🚫 Подписка отменена. {expire_line}"
                       "Возобновить — /upgrade")
         return JSONResponse({"ok": True})
 

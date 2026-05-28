@@ -69,6 +69,7 @@ def settings_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💱 Сменить валюту", callback_data="change_currency")],
         [InlineKeyboardButton(text="💎 Управление подпиской", callback_data="show_subscription")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="show_invite")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="show_help")],
     ])
 

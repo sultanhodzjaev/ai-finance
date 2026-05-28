@@ -9,12 +9,27 @@ from services import gemini, storage
 
 logger = logging.getLogger(__name__)
 
-# Asia/Bishkek = UTC+6. Ежедневное напоминание в 21:00 Bishkek = 15:00 UTC.
-DAILY_REMINDER_UTC_HOUR = 15
-# Weekly summary — воскресенье 20:00 Bishkek = воскресенье 14:00 UTC.
-# weekday(): Mon=0 … Sun=6.
-WEEKLY_SUMMARY_UTC_HOUR = 14
+# Приближение часового пояса по валюте: для большинства юзеров KGS/KZT/RUB/UZS этого
+# достаточно, для USD оставляем UTC (там сильный разброс между регионами).
+TIMEZONE_OFFSETS_BY_CURRENCY: dict[str, int] = {
+    "KGS": 6,   # Asia/Bishkek
+    "KZT": 5,   # Asia/Almaty
+    "UZS": 5,   # Asia/Tashkent
+    "RUB": 3,   # Europe/Moscow
+    "USD": 0,   # без надёжного маппинга — UTC
+}
+DEFAULT_OFFSET = 6  # legacy-юзеры без валюты — Бишкек, как и было раньше
+
+# Локальное время отправки напоминаний и weekly-summary.
+DAILY_REMINDER_LOCAL_HOUR = 21
+WEEKLY_SUMMARY_LOCAL_HOUR = 20
+# weekday(): Mon=0 … Sun=6. Воскресенье считаем по UTC — точность ±1 день для US ок.
 WEEKLY_SUMMARY_WEEKDAY = 6
+
+
+def _local_hour_for(currency: str | None, now_utc: datetime) -> int:
+    offset = TIMEZONE_OFFSETS_BY_CURRENCY.get((currency or "").upper(), DEFAULT_OFFSET)
+    return (now_utc.hour + offset) % 24
 
 
 async def _send_safe(bot: Bot, chat_id: int, text: str) -> bool:
@@ -68,12 +83,14 @@ async def trial_sweep(bot: Bot) -> None:
         logger.info(f"trial_sweep: warned={warned}, expired={expired}")
 
 
-async def weekly_summary(bot: Bot) -> None:
+async def weekly_summary(bot: Bot, now_utc: datetime | None = None) -> None:
     """
     Раз в неделю шлёт активным юзерам итоги последних 7 дней —
     топ-категории, дельта к прошлой неделе, аномалии, одно действие.
-    Текст готовит gemini.generate_weekly_summary.
+    Фильтр по local-hour: шлём только тем, у кого сейчас WEEKLY_SUMMARY_LOCAL_HOUR
+    в их часовом поясе (выводится из валюты).
     """
+    now_utc = now_utc or datetime.now(timezone.utc)
     sent = 0
     skipped = 0
     for u in storage.find_active_users(within_days=14):
@@ -83,6 +100,8 @@ async def weekly_summary(bot: Bot) -> None:
         if storage.is_banned(uid):
             continue
         currency = u.get("currency") or "KGS"
+        if _local_hour_for(currency, now_utc) != WEEKLY_SUMMARY_LOCAL_HOUR:
+            continue
         first_name = u.get("first_name") or ""
         try:
             txs = storage.get_transactions(uid, since_days=14)
@@ -112,12 +131,18 @@ async def weekly_summary(bot: Bot) -> None:
     logger.info(f"weekly_summary: sent={sent}, skipped_no_data={skipped}")
 
 
-async def daily_reminders(bot: Bot) -> None:
-    """Ежедневное напоминание тем, кто сегодня не записал ни одной траты."""
+async def daily_reminders(bot: Bot, now_utc: datetime | None = None) -> None:
+    """Ежедневное напоминание тем, кто сегодня не записал ни одной траты.
+    Фильтр по local-hour: шлём только тем, у кого сейчас DAILY_REMINDER_LOCAL_HOUR
+    в их часовом поясе (выводится из валюты)."""
+    now_utc = now_utc or datetime.now(timezone.utc)
     sent = 0
     for u in storage.find_users_without_transactions_today():
         uid = u.get("telegram_id")
         if not uid:
+            continue
+        currency = u.get("currency") or "KGS"
+        if _local_hour_for(currency, now_utc) != DAILY_REMINDER_LOCAL_HOUR:
             continue
         name = u.get("first_name") or "Друг"
         ok = await _send_safe(
@@ -211,13 +236,15 @@ async def process_recurring_payments(bot: Bot) -> None:
 async def scheduler_loop(bot: Bot) -> None:
     """
     Главный цикл планировщика. Тикает раз в минуту.
-    - trial_sweep — каждый тик
-    - process_recurring_payments — каждый тик
-    - daily_reminders — один раз в день в 21:00 Asia/Bishkek (15:00 UTC)
+    - trial_sweep, process_recurring_payments, detect_abuse — каждый тик
+    - daily_reminders — раз в час; внутри фильтрует юзеров по local hour
+    - weekly_summary — раз в час по воскресеньям; внутри фильтрует по local hour
+    Это позволяет шлать напоминания в 21:00 локального времени каждого юзера,
+    а не в одно UTC-время для всех.
     """
     logger.info("scheduler_loop: started")
-    last_reminder_date = None
-    last_weekly_date = None
+    last_reminder_hour_key: str | None = None
+    last_weekly_hour_key: str | None = None
 
     while True:
         try:
@@ -226,17 +253,20 @@ async def scheduler_loop(bot: Bot) -> None:
             await detect_abuse(bot)
 
             now_utc = datetime.now(timezone.utc)
-            today_utc = now_utc.date()
-            if now_utc.hour == DAILY_REMINDER_UTC_HOUR and last_reminder_date != today_utc:
-                await daily_reminders(bot)
-                last_reminder_date = today_utc
+            hour_key = now_utc.strftime("%Y-%m-%dT%H")
+
+            # daily: на каждом новом UTC-часе пробуем разослать. find_users_… вернёт
+            # тех, у кого нет трат сегодня; внутри функция отфильтрует по local hour.
+            if last_reminder_hour_key != hour_key:
+                await daily_reminders(bot, now_utc=now_utc)
+                last_reminder_hour_key = hour_key
+
             if (
                 now_utc.weekday() == WEEKLY_SUMMARY_WEEKDAY
-                and now_utc.hour == WEEKLY_SUMMARY_UTC_HOUR
-                and last_weekly_date != today_utc
+                and last_weekly_hour_key != hour_key
             ):
-                await weekly_summary(bot)
-                last_weekly_date = today_utc
+                await weekly_summary(bot, now_utc=now_utc)
+                last_weekly_hour_key = hour_key
         except Exception as e:
             logger.error(f"scheduler_loop tick failed: {e}")
 
