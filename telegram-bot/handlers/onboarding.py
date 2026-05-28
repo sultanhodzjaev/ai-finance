@@ -289,9 +289,12 @@ async def cb_show_subscription(callback: CallbackQuery, state: FSMContext):
 
 @router.message(F.text == "📊 План")
 async def legacy_plan(message: Message):
-    from handlers.plan import build_plan_text
-    text = build_plan_text(message.from_user.id) or "Сначала нажми /start."
-    await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    # Не дублируем логику cmd_plan — он сам добавит inline-кнопки апгрейда
+    # по текущему тарифу. ReplyKeyboardRemove не делаем тут специально: иначе
+    # пришлось бы два сообщения подряд (Telegram не даёт смешать reply-keyboard
+    # с inline в одном). Старая клава сотрётся при следующем legacy-нажатии.
+    from handlers.plan import cmd_plan
+    await cmd_plan(message)
 
 
 @router.message(F.text == "📈 Статистика")
