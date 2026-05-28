@@ -270,12 +270,6 @@ async def handle_document_import(message: Message, state: FSMContext):
     if current_state is not None:
         return
 
-    doc = message.document
-    name = (doc.file_name or "").lower()
-    if not name.endswith(".csv"):
-        await message.answer("Я принимаю только CSV-файлы. Если у тебя Excel — экспортируй как CSV.")
-        return
-
     user = message.from_user
     storage.get_or_create_user(
         telegram_id=user.id,
@@ -283,15 +277,24 @@ async def handle_document_import(message: Message, state: FSMContext):
         first_name=user.first_name or "Друг",
     )
 
+    # Сначала проверяем план — если CSV-импорт недоступен, бесполезно мучить юзера
+    # требованием «пришли в CSV». Free-юзер с .xlsx должен видеть «не на твоём тарифе»,
+    # а не «принимаю только CSV».
     db_user = storage.get_user(user.id) or {}
     plan = plans.effective_plan(db_user)
     if not plans.LIMITS.get(plan, {}).get("csv_import"):
         await message.answer(
-            f"Импорт CSV доступен на Premium и Pro. Сейчас у тебя <b>{plans.PLAN_TITLE.get(plan, plan)}</b>.\n"
+            f"Импорт файлов доступен на Premium и Pro. Сейчас у тебя <b>{plans.PLAN_TITLE.get(plan, plan)}</b>.\n"
             "Подними план — /upgrade",
             parse_mode="HTML",
         )
         storage.log_event(user.id, "limit_hit", {"action": "csv_import", "plan": plan})
+        return
+
+    doc = message.document
+    name = (doc.file_name or "").lower()
+    if not name.endswith(".csv"):
+        await message.answer("Я принимаю только CSV-файлы. Если у тебя Excel — экспортируй как CSV.")
         return
 
     if doc.file_size and doc.file_size > 2 * 1024 * 1024:
@@ -487,8 +490,13 @@ async def handle_change_category(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_cancel")
 async def handle_cancel_transaction(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Окей, отменил.")
+    # Перезаписываем текст карточки на «отменено», чтобы не было «застрявшей»
+    # подтверждалки и отдельного «Окей, отменил» — одно сообщение читается чище.
+    try:
+        await callback.message.edit_text("❌ Запись отменена.", reply_markup=None)
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Окей, отменил.")
     await callback.answer()
 
 

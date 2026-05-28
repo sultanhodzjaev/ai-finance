@@ -229,7 +229,9 @@ def deny_message(plan: str, action: Action, used: int, limit: int) -> str:
         return f"{head}\nТекущий план: <b>{plan_title}</b>.\n\n{_upgrade_hint(plan, action)}"
 
     head_map = {
-        "transaction": f"Ты записал {used} трат {period_word} — это лимит плана <b>{plan_title}</b>.",
+        # «transaction» считает только source='text' — уточняем чтобы юзер не подумал
+        # что лимит на всё, включая фото-чеки.
+        "transaction": f"Ты записал {used} текстовых трат {period_word} — это лимит плана <b>{plan_title}</b>.",
         "photo":       f"Ты отправил {used} фото чеков {period_word} — лимит плана <b>{plan_title}</b>.",
         "ai_question": f"Ты задал {used} вопросов финансисту {period_word} — лимит плана <b>{plan_title}</b>.",
         "voice":       f"Ты записал {used} голосовых {period_word} — лимит плана <b>{plan_title}</b>.",
