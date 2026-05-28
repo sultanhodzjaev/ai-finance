@@ -124,6 +124,32 @@ html.dark .text-white               { /* trust author — не трогаем */
    Микро-анимации, переходы
    ============================================================ */
 
+/* FAB-кнопка «+» в bottom-nav. Чистый CSS вместо Tailwind utilities, чтобы
+   transform translateX(-50%) для центрирования и scale(.95) при tap не дрались
+   друг с другом через --tw-translate-x/--tw-scale-x composed transform. */
+.fab-plus {
+    position: absolute;
+    left: 50%;
+    top: -16px;
+    transform: translateX(-50%);
+    filter: drop-shadow(0 8px 20px rgba(99, 102, 241, 0.50));
+}
+.fab-plus-circle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 9999px;
+    color: #fff;
+    background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 55%, #4f46e5 100%);
+    transition: transform 0.12s ease-out;
+    transform-origin: 50% 50%;
+}
+.fab-plus:active .fab-plus-circle {
+    transform: scale(0.93);
+}
+
 .screen-enter { animation: fadeIn 0.2s ease-in-out; }
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
