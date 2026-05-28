@@ -33,10 +33,13 @@ def _check_action_limit(telegram_id: int, action: str) -> tuple[bool, str]:
     period = plans.period_for(action)
 
     if action == "transaction":
+        # Бакет «текстовая трата» объединяет чат-бот (source='text') и Mini App
+        # (source='miniapp'). Без этого юзер обходит лимит через фронт.
+        text_like_sources = ["text", "miniapp"]
         used = (
-            storage.count_transactions_today(telegram_id, source="text")
+            storage.count_transactions_today_in_sources(telegram_id, text_like_sources)
             if period == "day"
-            else storage.count_transactions_this_month(telegram_id, source="text")
+            else storage.count_transactions_this_month_in_sources(telegram_id, text_like_sources)
         )
     elif action == "photo":
         used = (
