@@ -175,12 +175,8 @@ async def cb_show_subscription(callback: CallbackQuery):
 @router.message(F.text == "📊 План")
 async def legacy_plan(message: Message):
     from handlers.plan import build_plan_text
-    text = build_plan_text(message.from_user.id)
-    if text is None:
-        await message.answer("Сначала нажми /start.", reply_markup=ReplyKeyboardRemove())
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
-    await message.answer("Меню 👇", reply_markup=main_inline_kb())
+    text = build_plan_text(message.from_user.id) or "Сначала нажми /start."
+    await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(F.text == "📈 Статистика")
@@ -196,7 +192,6 @@ async def legacy_ai(message: Message):
         "🤖 Спроси меня о своих финансах. Например: «где я слил больше всего за неделю?»",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await message.answer("Меню 👇", reply_markup=main_inline_kb())
 
 
 @router.message(F.text == "⚙️ Настройки")

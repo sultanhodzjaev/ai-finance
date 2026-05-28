@@ -2,7 +2,7 @@ import logging
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message
 
 from services import storage
 from handlers.onboarding import currency_picker_kb, main_inline_kb
@@ -93,13 +93,13 @@ async def cmd_start(message: Message):
         )
         return
 
-    # Возвращающийся юзер: приветствие шлём с ReplyKeyboardRemove(), чтобы стереть legacy
-    # persistent-клавиатуру у юзеров прошлой версии; следующим сообщением — inline-меню.
+    # Возвращающийся юзер: приветствие + inline-меню в одном сообщении.
+    # Если у юзера осталась legacy persistent-reply-клава — она стирается при первом
+    # нажатии на любой её текст (см. legacy_* handlers в onboarding.py).
     await message.answer(
         f"👋 С возвращением, {first_name}!\n\n"
         "Напиши трату обычным сообщением или выбери действие 👇"
         f"{referral_note}",
         parse_mode="HTML",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=main_inline_kb(),
     )
-    await message.answer("Меню 👇", reply_markup=main_inline_kb())
