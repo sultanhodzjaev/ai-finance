@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime
 
 from aiogram import Router, F
@@ -68,8 +70,10 @@ router = Router()
 
 
 class TransactionStates(StatesGroup):
+    # waiting_confirmation теперь multi-card: state.data["cards"] = {card_id: tx_data}.
+    # Карточек может быть несколько одновременно (юзер кидает 5 чеков подряд —
+    # каждая обрабатывается независимо по своему card_id).
     waiting_confirmation          = State()
-    waiting_category_change       = State()
     waiting_batch_confirmation    = State()
     waiting_batch_category_change = State()
 
@@ -85,16 +89,50 @@ def _plural_ru(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
-def get_confirmation_keyboard() -> InlineKeyboardMarkup:
+# ---------------------------------------------------------------------------
+# Multi-card модель: несколько pending-карточек одновременно
+# ---------------------------------------------------------------------------
+
+# Per-user lock на чтение-модификацию-запись state.data["cards"]. Без него при
+# одновременной отправке нескольких фото/сообщений их хендлеры читают одинаковый
+# снапшот cards={...} и каждый пишет своё — последняя запись затирает остальные
+# (именно так пользователи сталкивались с «4 карточки слились в одну»).
+_USER_STATE_LOCKS: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def _new_card_id() -> str:
+    """Короткий ID (8 hex символов), чтобы влезть в 64-байтный лимит callback_data."""
+    return uuid.uuid4().hex[:8]
+
+
+def get_confirmation_keyboard(card_id: str) -> InlineKeyboardMarkup:
+    """Кнопки карточки. card_id зашит в callback_data — каждая карточка независима."""
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Сохранить",          callback_data="confirm_save"),
-        InlineKeyboardButton(text="✏️ Изменить категорию", callback_data="confirm_change_cat"),
-        InlineKeyboardButton(text="❌ Отмена",             callback_data="confirm_cancel"),
+        InlineKeyboardButton(text="✅ Сохранить",          callback_data=f"cs:{card_id}"),
+        InlineKeyboardButton(text="✏️ Изменить категорию", callback_data=f"cg:{card_id}"),
+        InlineKeyboardButton(text="❌ Отмена",             callback_data=f"cc:{card_id}"),
     ]])
 
 
+def get_card_categories_keyboard(tx_type: str, card_id: str) -> InlineKeyboardMarkup:
+    """Категории для конкретной single-card карточки — id зашит в callback_data.
+    Отдельная от батч-флоу (тот использует cat_<cat_id> без card_id)."""
+    source = CATEGORIES if tx_type == "expense" else INCOME_CATEGORIES
+    buttons = []
+    for i in range(0, len(source), 2):
+        row = []
+        for cat in source[i:i + 2]:
+            row.append(InlineKeyboardButton(
+                text=f"{cat['emoji']} {cat['name']}",
+                callback_data=f"cat:{card_id}:{cat['id']}",
+            ))
+        buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_categories_keyboard(tx_type: str = "expense") -> InlineKeyboardMarkup:
-    """Возвращает клавиатуру категорий — расходных или доходных."""
+    """Категории для батч-флоу — callback_data = cat_<cat_id> без card_id.
+    Сохранена как есть для совместимости с handle_batch_edit/handle_batch_category_selected."""
     source = CATEGORIES if tx_type == "expense" else INCOME_CATEGORIES
     buttons = []
     for i in range(0, len(source), 2):
@@ -107,6 +145,61 @@ def get_categories_keyboard(tx_type: str = "expense") -> InlineKeyboardMarkup:
         buttons.append(row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
+async def _add_card(state: FSMContext, user_id: int, td: dict) -> str:
+    """Кладёт карточку в state.data["cards"] под новым card_id, выставляет
+    waiting_confirmation. Возвращает card_id. RMW защищён per-user lock'ом."""
+    async with _USER_STATE_LOCKS[user_id]:
+        card_id = _new_card_id()
+        data = await state.get_data()
+        cards = data.get("cards") or {}
+        cards[card_id] = td
+        await state.set_state(TransactionStates.waiting_confirmation)
+        await state.update_data(cards=cards)
+        return card_id
+
+
+async def _remove_card(state: FSMContext, user_id: int, card_id: str) -> int:
+    """Убирает карточку из state.data["cards"]. Если карточек больше нет — чистит state.
+    Возвращает количество оставшихся pending карточек."""
+    async with _USER_STATE_LOCKS[user_id]:
+        data = await state.get_data()
+        cards = data.get("cards") or {}
+        cards.pop(card_id, None)
+        if not cards:
+            # Полностью очищаем state — иначе stale batch-ключи могут мешать.
+            await state.clear()
+            return 0
+        await state.update_data(cards=cards)
+        return len(cards)
+
+
+async def _update_card(state: FSMContext, user_id: int, card_id: str, patch: dict) -> dict | None:
+    """Применяет patch к карточке. Возвращает обновлённую td или None если её уже нет."""
+    async with _USER_STATE_LOCKS[user_id]:
+        data = await state.get_data()
+        cards = data.get("cards") or {}
+        td = cards.get(card_id)
+        if td is None:
+            return None
+        td.update(patch)
+        cards[card_id] = td
+        await state.update_data(cards=cards)
+        return td
+
+
+def _can_add_new_card(current_state: str | None) -> bool:
+    """Разрешено ли в текущем стейте добавить новую single-card карточку.
+    Разрешаем только когда state пустой или уже waiting_confirmation (multi-card),
+    блокируем во всех остальных диалогах (batch, регулярные платежи, онбординг и т.д.)."""
+    if current_state is None:
+        return True
+    return current_state == TransactionStates.waiting_confirmation.state
+
+
+# ---------------------------------------------------------------------------
+# Batch-флоу: карточка для нескольких операций из одного голосового
+# ---------------------------------------------------------------------------
 
 def build_batch_text(items: list, currency: str, transcript: str) -> str:
     """Карточка для нескольких операций из одного голосового."""
@@ -194,10 +287,7 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     """Обрабатывает текстовое сообщение как трату или доход."""
     from utils.safety import sanitize_input, detect_injection
     current_state = await state.get_state()
-    if current_state is not None:
-        # Юзер в активном диалоге (но именно его state-handler ничего не ловит — например
-        # обработчик отдельной группы выше уже ответил, а current state остался). Не молчим,
-        # чтобы юзер понимал что писать в чужой контекст бесполезно.
+    if not _can_add_new_card(current_state):
         await message.answer(
             "⚠️ У тебя сейчас открыт другой диалог (например /addrec или /ask). "
             "Заверши его или нажми /cancel — потом я смогу записать твою трату."
@@ -266,12 +356,11 @@ async def handle_text_transaction(message: Message, state: FSMContext):
         "source":      "text",
         "currency":    currency,
     }
-    await state.set_state(TransactionStates.waiting_confirmation)
-    await state.update_data(transaction=transaction_data)
+    card_id = await _add_card(state, user.id, transaction_data)
 
     await message.answer(
         build_confirmation_text(transaction_data),
-        reply_markup=get_confirmation_keyboard(),
+        reply_markup=get_confirmation_keyboard(card_id),
     )
 
 
@@ -279,7 +368,7 @@ async def handle_text_transaction(message: Message, state: FSMContext):
 async def handle_photo_transaction(message: Message, state: FSMContext):
     """Обрабатывает фото как потенциальный чек (всегда расход)."""
     current_state = await state.get_state()
-    if current_state is not None:
+    if not _can_add_new_card(current_state):
         return
 
     user = message.from_user
@@ -332,12 +421,11 @@ async def handle_photo_transaction(message: Message, state: FSMContext):
         "source":      "photo",
         "currency":    currency,
     }
-    await state.set_state(TransactionStates.waiting_confirmation)
-    await state.update_data(transaction=transaction_data)
+    card_id = await _add_card(state, user.id, transaction_data)
 
     await message.answer(
         build_confirmation_text(transaction_data),
-        reply_markup=get_confirmation_keyboard(),
+        reply_markup=get_confirmation_keyboard(card_id),
     )
 
 
@@ -456,7 +544,10 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
     logger.info(f"voice handler: tg_user={message.from_user.id} duration={message.voice.duration if message.voice else '?'}s "
                 f"mime={message.voice.mime_type if message.voice else '?'}")
     current_state = await state.get_state()
-    if current_state is not None:
+    # Голос с одной операцией = single-card (пускаем поверх pending карточек);
+    # с несколькими операциями = batch (батч требует эксклюзивный стейт, не уживается
+    # с pending single-cards — это проверим уже после парсинга).
+    if not _can_add_new_card(current_state):
         logger.info(f"voice handler: skipped, user in FSM state {current_state}")
         return
 
@@ -525,7 +616,7 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
         trimmed = len(items) - remaining
         items = items[:remaining]
 
-    # === Одиночная операция: используем существующую single-card-флоу ===
+    # === Одиночная операция: добавляем как обычную single-card ===
     if len(items) == 1:
         it = items[0]
         transaction_data = {
@@ -537,8 +628,7 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
             "source":      "voice",
             "currency":    currency,
         }
-        await state.set_state(TransactionStates.waiting_confirmation)
-        await state.update_data(transaction=transaction_data)
+        card_id = await _add_card(state, user.id, transaction_data)
 
         # Одноразовая подсказка про батч-голос: транскрипт длинный (юзер явно
         # пробовал говорить много), но Gemini увидел только 1 операцию —
@@ -553,12 +643,22 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
 
         await message.answer(
             f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(transaction_data) + hint,
-            reply_markup=get_confirmation_keyboard(),
+            reply_markup=get_confirmation_keyboard(card_id),
             parse_mode="HTML",
         )
         return
 
     # === Несколько операций: batch-карточка ===
+    # Batch требует эксклюзивный стейт. Если у юзера уже есть pending single-cards,
+    # попросить сначала разобраться с ними, иначе батч их затрёт/перепутает.
+    existing_data = await state.get_data()
+    if existing_data.get("cards"):
+        await message.answer(
+            "⚠️ У тебя есть несохранённые карточки выше — подтверди или отмени их, "
+            "потом наговори голосовое с несколькими тратами ещё раз."
+        )
+        return
+
     await state.set_state(TransactionStates.waiting_batch_confirmation)
     await state.update_data(
         batch_items=items,
@@ -581,60 +681,135 @@ async def handle_voice_transaction(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_save")
-async def handle_save_transaction(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет транзакцию после подтверждения."""
-    data = await state.get_data()
-    td   = data["transaction"]
-    tx_type = td.get("type", "expense")
+# ---------------------------------------------------------------------------
+# Single-card callback-хендлеры (multi-card aware): cs:/cg:/cc:/cat:
+# ---------------------------------------------------------------------------
 
+
+async def _expire_stale_card(callback: CallbackQuery, message_text: str = "") -> None:
+    """Карточка уже не в state.data — кнопка устарела (рестарт бота, отмена и т.п.).
+    Снимаем клавиатуру, показываем спиннер-ответ."""
+    try:
+        if message_text:
+            await callback.message.edit_text(message_text, reply_markup=None)
+        else:
+            await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer("Эта карточка уже неактуальна, начни заново")
+
+
+@router.callback_query(TransactionStates.waiting_confirmation, F.data.startswith("cs:"))
+async def handle_card_save(callback: CallbackQuery, state: FSMContext):
+    """Сохраняет одну конкретную карточку (по card_id из callback_data)."""
+    card_id = callback.data[3:]
+    data = await state.get_data()
+    cards = data.get("cards") or {}
+    td = cards.get(card_id)
+    if td is None:
+        await _expire_stale_card(callback)
+        return
+
+    tx_type = td.get("type", "expense")
     transaction = {
         "id":          str(uuid.uuid4()),
         "type":        tx_type,
         "amount":      td["amount"],
         "category":    td["category"],
-        "description": td["description"],
+        "description": td.get("description", ""),
         "merchant":    td.get("merchant"),
         "datetime":    datetime.now().isoformat(),
         "source":      td.get("source", "text"),
     }
-
     storage.add_transaction(callback.from_user.id, transaction)
-    await state.clear()
-    await callback.message.edit_reply_markup(reply_markup=None)
+    await _remove_card(state, callback.from_user.id, card_id)
 
+    currency = td.get("currency", "KGS")
+    amt_str = format_amount(td["amount"], currency)
+    desc = td.get("description") or td.get("merchant") or ("доход" if tx_type == "income" else "трата")
     if tx_type == "income":
-        await callback.message.answer("💰 Записал доход! Поздравляю!")
+        confirm_text = f"💰 Записал доход: <b>+{amt_str}</b> ({desc}). Поздравляю!"
     else:
-        await callback.message.answer("✅ Записал трату! Так держать.")
+        confirm_text = f"✅ Записал трату: <b>{amt_str}</b> ({desc}). Так держать."
+    try:
+        await callback.message.edit_text(confirm_text, parse_mode="HTML")
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(confirm_text, parse_mode="HTML")
     await callback.answer()
 
 
-@router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_change_cat")
-async def handle_change_category(callback: CallbackQuery, state: FSMContext):
-    """Переводит в состояние выбора категории (показывает нужный список)."""
-    data    = await state.get_data()
-    tx_type = data["transaction"].get("type", "expense")
+@router.callback_query(TransactionStates.waiting_confirmation, F.data.startswith("cg:"))
+async def handle_card_change_category(callback: CallbackQuery, state: FSMContext):
+    """Показывает список категорий для конкретной карточки. card_id остаётся
+    в callback_data кнопок — поэтому новый стейт не нужен."""
+    card_id = callback.data[3:]
+    data = await state.get_data()
+    cards = data.get("cards") or {}
+    td = cards.get(card_id)
+    if td is None:
+        await _expire_stale_card(callback)
+        return
 
-    await state.set_state(TransactionStates.waiting_category_change)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        "Выбери категорию:",
-        reply_markup=get_categories_keyboard(tx_type),
-    )
+    tx_type = td.get("type", "expense")
+    try:
+        await callback.message.edit_text(
+            "Выбери категорию:",
+            reply_markup=get_card_categories_keyboard(tx_type, card_id),
+        )
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "Выбери категорию:",
+            reply_markup=get_card_categories_keyboard(tx_type, card_id),
+        )
     await callback.answer()
 
 
-@router.callback_query(TransactionStates.waiting_confirmation, F.data == "confirm_cancel")
-async def handle_cancel_transaction(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    # Перезаписываем текст карточки на «отменено», чтобы не было «застрявшей»
-    # подтверждалки и отдельного «Окей, отменил» — одно сообщение читается чище.
+@router.callback_query(TransactionStates.waiting_confirmation, F.data.startswith("cc:"))
+async def handle_card_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отменяет одну конкретную карточку."""
+    card_id = callback.data[3:]
+    data = await state.get_data()
+    cards = data.get("cards") or {}
+    if card_id not in cards:
+        await _expire_stale_card(callback)
+        return
+    await _remove_card(state, callback.from_user.id, card_id)
     try:
         await callback.message.edit_text("❌ Запись отменена.", reply_markup=None)
     except Exception:
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer("Окей, отменил.")
+    await callback.answer()
+
+
+@router.callback_query(TransactionStates.waiting_confirmation, F.data.startswith("cat:"))
+async def handle_card_category_selected(callback: CallbackQuery, state: FSMContext):
+    """Выбрана категория для конкретной карточки — обновляем и возвращаем карточку
+    с обычными кнопками подтверждения."""
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3:
+        await callback.answer("Не понял")
+        return
+    _, card_id, new_cat_id = parts
+
+    td = await _update_card(state, callback.from_user.id, card_id, {"category": new_cat_id})
+    if td is None:
+        await _expire_stale_card(callback)
+        return
+
+    try:
+        await callback.message.edit_text(
+            build_confirmation_text(td),
+            reply_markup=get_confirmation_keyboard(card_id),
+        )
+    except Exception:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            build_confirmation_text(td),
+            reply_markup=get_confirmation_keyboard(card_id),
+        )
     await callback.answer()
 
 
@@ -713,7 +888,9 @@ async def handle_batch_delete(callback: CallbackQuery, state: FSMContext):
     currency = db_user.get("currency", "KGS")
 
     if len(items) == 1:
-        # Остался один — переводим юзера в обычную single-card-карточку
+        # Остался один — превращаем в single-card и чистим батч-стейт.
+        # _add_card сам выставит waiting_confirmation; перед этим очищаем
+        # batch-ключи, чтобы не висели в state.
         it = items[0]
         td = {
             "type":        it.get("type", "expense"),
@@ -724,17 +901,17 @@ async def handle_batch_delete(callback: CallbackQuery, state: FSMContext):
             "source":      "voice",
             "currency":    currency,
         }
-        await state.set_state(TransactionStates.waiting_confirmation)
-        await state.update_data(transaction=td)
+        await state.update_data(batch_items=None, batch_transcript=None, batch_trimmed=None, batch_edit_idx=None)
+        card_id = await _add_card(state, callback.from_user.id, td)
         try:
             await callback.message.edit_text(
                 f"🎙 Услышал: «{transcript}»\n\n" + build_confirmation_text(td),
-                reply_markup=get_confirmation_keyboard(),
+                reply_markup=get_confirmation_keyboard(card_id),
             )
         except Exception:
             await callback.message.answer(
                 build_confirmation_text(td),
-                reply_markup=get_confirmation_keyboard(),
+                reply_markup=get_confirmation_keyboard(card_id),
             )
         await callback.answer("Удалил")
         return
@@ -829,19 +1006,17 @@ async def handle_batch_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(TransactionStates.waiting_category_change, F.data.startswith("cat_"))
-async def handle_category_selected(callback: CallbackQuery, state: FSMContext):
-    """Обновляет категорию и возвращает к карточке подтверждения."""
-    new_cat_id = callback.data.replace("cat_", "")
-    data = await state.get_data()
-    td   = data["transaction"]
-    td["category"] = new_cat_id
+# ---------------------------------------------------------------------------
+# Совместимость со старыми кнопками (до multi-card refactor'а)
+# ---------------------------------------------------------------------------
+# Кнопки confirm_save/confirm_change_cat/confirm_cancel могли остаться у юзера
+# в чате с прошлых сессий бота (Redis-стейт мы не чистим). Чтобы они не выглядели
+# «глухими», ловим их и говорим юзеру отправить заново.
 
-    await state.update_data(transaction=td)
-    await state.set_state(TransactionStates.waiting_confirmation)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        build_confirmation_text(td),
-        reply_markup=get_confirmation_keyboard(),
-    )
-    await callback.answer()
+@router.callback_query(F.data.in_({"confirm_save", "confirm_change_cat", "confirm_cancel"}))
+async def handle_legacy_confirm_buttons(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.answer("Эта карточка устарела, отправь заново", show_alert=True)
