@@ -4,10 +4,16 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from services import gemini, plans, storage
 from services.gemini import RateLimitError
+
+
+def _advisor_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data="advisor_cancel"),
+    ]])
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -31,9 +37,21 @@ async def cmd_ask(event: Message | CallbackQuery, state: FSMContext):
     await state.set_state(AdvisorStates.waiting_question)
     await send(
         "Задай мне любой вопрос про твои финансы. "
-        "Например: \"сколько я трачу на еду?\", "
-        "\"где я слил больше всего в этом месяце?\""
+        "Например: «сколько я трачу на еду?», «где я слил больше всего в этом месяце?»\n\n"
+        "Чтобы выйти из диалога — /cancel или кнопка ниже.",
+        reply_markup=_advisor_cancel_kb(),
     )
+
+
+@router.callback_query(F.data == "advisor_cancel")
+async def cb_advisor_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer("Отменено")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("Окей, отменил.")
 
 
 @router.message(AdvisorStates.waiting_question)

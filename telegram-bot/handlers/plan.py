@@ -136,26 +136,36 @@ async def cmd_plan(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
+def _build_tier_summary(plan: str) -> str:
+    """Краткое описание тарифа, собранное из LIMITS — гарантированно совпадает с реальными лимитами."""
+    cfg = plans.LIMITS[plan]
+    title = plans.PLAN_TITLE[plan]
+    price = plans.PRICE_USD[plan]
+    icon = "💎" if plan == plans.PLAN_PREMIUM else "🚀"
+    history_months = (cfg["history_days"] // 30) if cfg.get("history_days") else None
+    history_line = f"вся за период подписки" if history_months is None else f"{history_months} мес"
+    return (
+        f"{icon} <b>{title} — ${price} / мес</b>\n"
+        f"  • {cfg['transactions_per_day']} текстовых трат / день\n"
+        f"  • {cfg['photo_per_month']} фото чеков / мес\n"
+        f"  • {cfg['voice_per_month']} голосовых / мес\n"
+        f"  • {cfg['ai_questions_per_month']} вопросов AI-финансисту / мес\n"
+        f"  • История: {history_line}\n"
+        f"  • {cfg['categories_max']} категорий, "
+        f"{cfg['recurring_payments_max']} регулярных платежей\n"
+        f"  • Импорт CSV: {'да' if cfg['csv_import'] else 'нет'}\n"
+        f"  • Экспортов: {cfg.get('exports_per_month', 0)} / мес"
+    )
+
+
 @router.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
-    """Показывает варианты подписки. Сам платёж — следующий коммит."""
+    """Показывает варианты подписки. Тексты тарифов формируются из LIMITS."""
     storage.log_event(message.from_user.id, "upgrade_clicked", {"source": "command"})
     await message.answer(
         "💳 <b>Подписка AI-Финансист</b>\n\n"
-        "💎 <b>Premium — $5 / мес</b>\n"
-        "  • 17 трат / день (≈500/мес)\n"
-        "  • 1 фото чек / день (≈30/мес)\n"
-        "  • 300 вопросов финансисту / мес\n"
-        "  • Голос: 60/мес\n"
-        "  • История: 12 мес\n"
-        "  • Импорт CSV и экспорт (3 в мес)\n\n"
-        "🚀 <b>Pro — $10 / мес</b>\n"
-        "  • 100 трат / день (≈3000/мес)\n"
-        "  • 5 фото чеков / день (≈150/мес)\n"
-        "  • 1500 вопросов финансисту / мес\n"
-        "  • Голос: 200/мес\n"
-        "  • История: 24 мес\n"
-        "  • Экспорт (10 в мес), 100 категорий\n\n"
+        f"{_build_tier_summary(plans.PLAN_PREMIUM)}\n\n"
+        f"{_build_tier_summary(plans.PLAN_PRO)}\n\n"
         "💳 Оплата картой через Lava.top. Подписка автопродлевается каждый месяц, можно отменить в любой момент.",
         parse_mode="HTML",
         reply_markup=_upgrade_keyboard(),

@@ -3,6 +3,7 @@ import logging
 
 from aiogram import Router, F
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardRemove,
@@ -12,6 +13,17 @@ from services import storage, plans
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    """Глобальный выход из любого FSM-диалога. Работает даже если state пустой."""
+    current = await state.get_state()
+    await state.clear()
+    if current:
+        await message.answer("✅ Отменил. Можешь продолжать обычно.")
+    else:
+        await message.answer("Сейчас нет активного диалога — но ок 🙂")
 
 
 # 5 валют, заявленные на старте. KGS — дефолт для legacy-юзеров.
@@ -62,16 +74,31 @@ def settings_kb() -> InlineKeyboardMarkup:
 
 
 async def _send_trial_intro(message_or_query, currency: str, first_name: str) -> None:
-    """Шлёт интро после выбора валюты — объясняет Trial и подталкивает к первой трате."""
-    trial_cfg = plans.LIMITS[plans.PLAN_TRIAL]
-    text = (
-        f"💱 Валюта: <b>{currency}</b>. Все траты теперь будут считаться в ней (поменять — ⚙️ Настройки).\n\n"
-        f"🎁 <b>У тебя 7 дней бесплатного Trial</b>\n"
-        f"  • {trial_cfg['transactions_per_day']} трат в день\n"
-        f"  • {trial_cfg['ai_questions_per_month']} вопросов AI-финансисту\n"
-        f"  • {trial_cfg['photo_per_month']} фото чеков\n"
-        f"  • {trial_cfg['voice_per_month']} голосовых\n"
-        f"  • Импорт CSV: {'да' if trial_cfg['csv_import'] else 'нет'}\n\n"
+    """Шлёт интро после выбора валюты — объясняет Trial и подталкивает к первой трате.
+    Для Owner-юзеров (allowlist) лимиты Trial бессмысленны — упоминаем безлимит вместо них."""
+    user_id = message_or_query.from_user.id if isinstance(message_or_query, CallbackQuery) else message_or_query.from_user.id
+    user = storage.get_user(user_id) or {}
+    plan = plans.effective_plan(user)
+
+    intro_currency = (
+        f"💱 Валюта: <b>{currency}</b>. Все траты теперь будут считаться в ней "
+        f"(поменять — ⚙️ Настройки).\n\n"
+    )
+
+    if plan == plans.PLAN_OWNER:
+        body = "👑 <b>У тебя Owner-доступ</b> — безлимит ко всем функциям бота.\n\n"
+    else:
+        trial_cfg = plans.LIMITS[plans.PLAN_TRIAL]
+        body = (
+            f"🎁 <b>У тебя 7 дней бесплатного Trial</b>\n"
+            f"  • {trial_cfg['transactions_per_day']} трат в день\n"
+            f"  • {trial_cfg['ai_questions_per_month']} вопросов AI-финансисту / мес\n"
+            f"  • {trial_cfg['photo_per_month']} фото чеков / мес\n"
+            f"  • {trial_cfg['voice_per_month']} голосовых / мес\n"
+            f"  • Импорт CSV: {'да' if trial_cfg['csv_import'] else 'нет'}\n\n"
+        )
+
+    text = intro_currency + body + (
         f"<b>Попробуй прямо сейчас 👇</b>\n"
         f"Напиши обычным сообщением, например:\n"
         f"  • <code>250 кофе</code>\n"
@@ -86,19 +113,24 @@ async def _send_trial_intro(message_or_query, currency: str, first_name: str) ->
 
 
 @router.callback_query(F.data.startswith("set_currency:"))
-async def cb_set_currency(callback: CallbackQuery):
+async def cb_set_currency(callback: CallbackQuery, state: FSMContext):
     code = callback.data.split(":", 1)[1]
     if code not in CURRENCY_CODES:
         await callback.answer("Неизвестная валюта", show_alert=True)
         return
+    await state.clear()  # выходим из чужого FSM, если юзер кликнул из state.
     storage.update_user_currency(callback.from_user.id, code)
     storage.log_event(callback.from_user.id, "currency_set", {"currency": code})
 
-    # Если это первый выбор после /start — шлём Trial-интро. Если смена через настройки — короткий ответ.
     user = storage.get_user(callback.from_user.id) or {}
-    has_transactions = storage.count_transactions_this_month(callback.from_user.id) > 0
+    # Trial-интро шлём ТОЛЬКО при первом выборе после /start. После log_event выше
+    # текущий currency_set уже учтён — поэтому == 1 = это и есть первая установка.
+    is_first_setup = (
+        storage.count_transactions_this_month(callback.from_user.id) == 0
+        and storage.count_events_this_month(callback.from_user.id, "currency_set") <= 1
+    )
 
-    if not has_transactions:
+    if is_first_setup:
         await _send_trial_intro(callback, code, user.get("first_name") or "Друг")
     else:
         await callback.message.answer(
@@ -132,14 +164,16 @@ async def cmd_settings(message: Message):
 
 
 @router.callback_query(F.data == "open_settings")
-async def cb_open_settings(callback: CallbackQuery):
+async def cb_open_settings(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     user = storage.get_user(callback.from_user.id) or {}
     await callback.message.answer(_settings_text(user), parse_mode="HTML", reply_markup=settings_kb())
     await callback.answer()
 
 
 @router.callback_query(F.data == "show_plan")
-async def cb_show_plan(callback: CallbackQuery):
+async def cb_show_plan(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     from handlers.plan import build_plan_text
     text = build_plan_text(callback.from_user.id)
     if text is None:
@@ -150,7 +184,8 @@ async def cb_show_plan(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "change_currency")
-async def cb_change_currency(callback: CallbackQuery):
+async def cb_change_currency(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.answer(
         "💱 Выбери новую валюту:",
         reply_markup=currency_picker_kb(),
@@ -159,8 +194,9 @@ async def cb_change_currency(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "show_subscription")
-async def cb_show_subscription(callback: CallbackQuery):
+async def cb_show_subscription(callback: CallbackQuery, state: FSMContext):
     """Показывает текущий план + кнопки апгрейда (если юзер не на платном тарифе)."""
+    await state.clear()
     from handlers.plan import build_plan_text, _upgrade_keyboard
     text = build_plan_text(callback.from_user.id)
     if text is None:
@@ -195,7 +231,8 @@ async def legacy_plan(message: Message):
 @router.message(F.text == "📈 Статистика")
 async def legacy_stats(message: Message):
     from handlers.stats import cmd_stats
-    await message.answer("📈 Статистика 👇", reply_markup=ReplyKeyboardRemove())
+    # ReplyKeyboardRemove() сотрётся при следующих legacy-нажатиях (📊/⚙️/🤖) — здесь
+    # пропускаем, чтобы не плодить два сообщения подряд (cmd_stats сам шлёт заголовок).
     await cmd_stats(message)
 
 

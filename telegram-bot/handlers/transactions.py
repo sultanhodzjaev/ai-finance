@@ -127,6 +127,13 @@ async def handle_text_transaction(message: Message, state: FSMContext):
     """Обрабатывает текстовое сообщение как трату или доход."""
     current_state = await state.get_state()
     if current_state is not None:
+        # Юзер в активном диалоге (но именно его state-handler ничего не ловит — например
+        # обработчик отдельной группы выше уже ответил, а current state остался). Не молчим,
+        # чтобы юзер понимал что писать в чужой контекст бесполезно.
+        await message.answer(
+            "⚠️ У тебя сейчас открыт другой диалог (например /addrec или /ask). "
+            "Заверши его или нажми /cancel — потом я смогу записать твою трату."
+        )
         return
 
     user = message.from_user
