@@ -42,16 +42,29 @@ def _api_key() -> str:
     return key
 
 
-async def _generate(contents: list, retries: int = 3, max_output_tokens: int | None = None) -> str:
+async def _generate(
+    contents: list,
+    retries: int = 3,
+    max_output_tokens: int | None = None,
+    response_mime_type: str | None = None,
+) -> str:
     """
     Отправляет запрос к Gemini REST API и возвращает текст ответа.
     Перебирает модели; при 429 делает до 3 попыток с нарастающей задержкой.
     max_output_tokens — жёсткий потолок ответа для cost-guard от runaway генерации
     (особенно важно если в prompt попал injection «print everything»).
+    response_mime_type — если задан "application/json", Gemini вернёт валидный
+    JSON-объект, а не текст с возможной markdown-обёрткой или плейсхолдерами
+    из примера в промпте (без этого 2.5-flash иногда копирует «число» как литерал).
     """
     payload: dict = {"contents": contents}
+    gen_config: dict = {}
     if max_output_tokens:
-        payload["generationConfig"] = {"maxOutputTokens": max_output_tokens}
+        gen_config["maxOutputTokens"] = max_output_tokens
+    if response_mime_type:
+        gen_config["responseMimeType"] = response_mime_type
+    if gen_config:
+        payload["generationConfig"] = gen_config
     key = _api_key()
     last_error: Exception = RuntimeError("Нет доступных моделей")
 
@@ -188,17 +201,25 @@ async def categorize_text_transactions_batch(user_message: str) -> dict:
         "КАТЕГОРИИ ДОХОДОВ (type=income):\n"
         "- salary, freelance, business, investment, gift_income, other_income\n\n"
         f'Сообщение пользователя: "{user_message}"\n\n'
-        "Ответь СТРОГО JSON без markdown и пояснений:\n"
-        '{"items": [{"type": "expense", "amount": число, "category": "id_категории", '
-        '"description": "краткое описание"}, ...], "success": true}\n\n'
-        "Если ни одной финансовой операции не нашёл:\n"
+        "Ответь СТРОГО валидным JSON без markdown.\n\n"
+        "Структура ответа когда есть операции:\n"
+        '{"success": true, "items": [{"type": "expense", "amount": 500, '
+        '"category": "transport", "description": "такси"}, '
+        '{"type": "expense", "amount": 2000, "category": "food", "description": "обед"}]}\n\n'
+        "Структура ответа если операций нет:\n"
         '{"success": false, "reason": "не похоже на финансовую операцию"}'
     )
 
     try:
-        # max_output_tokens=1024 — на 5-7 операций JSON помещается; больше — обычно
-        # либо галлюцинация, либо injection с попыткой вытянуть текст. Cost-guard.
-        text = await _generate([{"parts": [{"text": prompt}]}], max_output_tokens=1024)
+        # max_output_tokens=2048: для 5-7 операций JSON помещается с запасом
+        # на «thinking»-токены 2.5-flash. responseMimeType=application/json
+        # форсит модель отвечать валидным JSON — без этого она иногда копирует
+        # плейсхолдеры из примера в промпте («число») как литералы.
+        text = await _generate(
+            [{"parts": [{"text": prompt}]}],
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+        )
         result = _extract_json(text)
 
         if not result.get("success"):
