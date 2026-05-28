@@ -193,6 +193,25 @@ def _upgrade_hint(plan: str, action: Action) -> str:
     return "Лимит обновится со следующим периодом, либо подними план — /upgrade"
 
 
+def format_limits_summary(plan: str) -> str:
+    """Краткая HTML-сводка лимитов плана — для пушового сообщения об активации/продлении подписки."""
+    cfg = LIMITS.get(plan)
+    if not cfg:
+        return ""
+    history_line = (
+        "вся история" if cfg.get("history_days") is None
+        else f"{cfg['history_days']} дней истории"
+    )
+    return (
+        f"  • {cfg['transactions_per_day']} трат в день\n"
+        f"  • {cfg['ai_questions_per_month']} вопросов AI-финансисту в месяц\n"
+        f"  • {cfg['photo_per_month']} фото чеков в месяц\n"
+        f"  • {cfg['voice_per_month']} голосовых в месяц\n"
+        f"  • {history_line}, {cfg['categories_max']} категорий\n"
+        f"  • Импорт CSV и экспорт ({cfg.get('exports_per_month', 0)}/мес)"
+    )
+
+
 def deny_message(plan: str, action: Action, used: int, limit: int) -> str:
     """Текст, который бот покажет юзеру при превышении лимита."""
     plan_title = PLAN_TITLE.get(plan, plan)

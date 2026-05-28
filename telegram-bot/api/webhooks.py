@@ -91,7 +91,9 @@ async def lava_webhook(request: Request) -> JSONResponse:
                       f"🎉 <b>Подписка {title} активирована!</b>\n\n"
                       f"Списано: ${amount_int}/мес\n"
                       f"Следующее списание через 30 дней.\n\n"
-                      f"Лимиты обновлены — открой /plan чтобы посмотреть.")
+                      f"<b>Теперь доступно:</b>\n"
+                      f"{plans.format_limits_summary(tier)}\n\n"
+                      f"Открой /plan чтобы посмотреть остаток лимитов в любой момент.")
         return JSONResponse({"ok": True})
 
     if event == "subscription.recurring.payment.success" and status == "subscription-active":
@@ -102,7 +104,9 @@ async def lava_webhook(request: Request) -> JSONResponse:
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🔄 <b>Подписка {title} продлена на 30 дней.</b>\n"
-                      f"Списано: ${amount_int}.")
+                      f"Списано: ${amount_int}.\n\n"
+                      f"<b>Лимиты на следующий месяц:</b>\n"
+                      f"{plans.format_limits_summary(tier)}")
         return JSONResponse({"ok": True})
 
     if event == "subscription.cancelled":
