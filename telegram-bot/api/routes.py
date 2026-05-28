@@ -252,11 +252,20 @@ async def list_transactions(
 
 @router.post("/transactions")
 async def create_transaction(payload: dict, x_init_data: str = Header(...)):
-    """Создать транзакцию из Mini App (без AI)."""
+    """Создать транзакцию из Mini App (без AI).
+    Лимит тот же что в чат-боте: `_check_action_limit("transaction")` считает
+    бакет text+miniapp вместе. Без этой проверки фронт обходил лимиты."""
     from utils.safety import sanitize_input, detect_injection
     from services.storage import log_event
+    from handlers.transactions import _check_action_limit
     telegram_id = require_auth(x_init_data)
     ensure_user(x_init_data, telegram_id)
+
+    allowed, deny = _check_action_limit(telegram_id, "transaction")
+    if not allowed:
+        # 429 — Too Many Requests; фронт показывает текст из detail
+        raise HTTPException(status_code=429, detail=deny)
+
     # Описание может попасть в weekly_summary как контекст для Gemini —
     # обрезаем длину и логируем подозрительные паттерны.
     raw_desc = payload.get("description", "") or ""
