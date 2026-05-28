@@ -283,10 +283,13 @@ function render() {
             ${state.screen === 'plan'      ? buildPlan()      : ''}
             ${state.screen === 'upgrade'   ? buildUpgrade()   : ''}
             ${state.screen === 'settings'  ? buildSettings()  : ''}
+            ${state.screen === 'invite'    ? buildInvite()    : ''}
+            ${state.screen === 'help'      ? buildHelp()      : ''}
         </div>
         ${buildNav()}
         ${buildBottomSheet()}
-        ${state.rangePickerOpen ? buildRangePicker() : ''}`);
+        ${state.rangePickerOpen ? buildRangePicker() : ''}
+        ${buildCurrencyPicker()}`);
     attachNavHandlers();
     if (state.screen === 'dashboard') {
         renderCharts();
@@ -302,6 +305,9 @@ function render() {
     if (state.screen === 'plan')      attachPlanHandlers();
     if (state.screen === 'upgrade')   attachUpgradeHandlers();
     if (state.screen === 'settings')  attachSettingsHandlers();
+    if (state.screen === 'invite')    attachInviteHandlers();
+    if (state.screen === 'help')      attachHelpHandlers();
+    if (state.currencyPickerOpen)     attachCurrencyPickerHandlers();
     if (state.selectedTx)             attachSheetHandlers();
 }
 
@@ -312,7 +318,7 @@ function buildNav() {
     const d = state.screen === 'dashboard',
           h = state.screen === 'history',
           p = state.screen === 'plan' || state.screen === 'upgrade';
-    const s = state.screen === 'settings';
+    const s = state.screen === 'settings' || state.screen === 'invite' || state.screen === 'help';
     // 5-колоночная raскладка: 2 кнопки слева, FAB в центре (3-й колонке), 2 справа.
     // grid grid-cols-5 даёт идеальное симметричное распределение — каждая колонка
     // ровно 20% ширины, центр nav совпадает с центром col 3 (где FAB).
@@ -1536,20 +1542,212 @@ function attachSettingsHandlers() {
     document.querySelectorAll('[data-action]').forEach(el => {
         el.addEventListener('click', () => {
             const action = el.dataset.action;
-            const tg = window.Telegram?.WebApp;
-            if (action === 'settings_plan')     { state.screen = 'plan'; render(); }
-            else if (action === 'settings_currency' || action === 'settings_invite' || action === 'settings_help') {
-                // Эти действия пока живут только в чат-боте — закрываем Mini App и подсказываем команду.
-                const hints = {
-                    settings_currency: 'Открой /settings → «Сменить валюту» в чате с ботом.',
-                    settings_invite:   'Открой /invite в чате с ботом — он пришлёт твою реф-ссылку.',
-                    settings_help:     'Открой /help в чате с ботом.',
-                };
-                if (tg?.showAlert) tg.showAlert(hints[action]);
-                else alert(hints[action]);
+            if (action === 'settings_plan')          { state.screen = 'plan';    render(); }
+            else if (action === 'settings_currency') { openCurrencyPicker(); }
+            else if (action === 'settings_invite')   { state.screen = 'invite';  render(); }
+            else if (action === 'settings_help')     { state.screen = 'help';    render(); }
+        });
+    });
+}
+
+
+// ----- Currency picker (bottom sheet) -----
+
+function openCurrencyPicker() {
+    state.currencyPickerOpen = true;
+    render();
+}
+
+function buildCurrencyPicker() {
+    if (!state.currencyPickerOpen) return '';
+    const currencies = [
+        ['KGS', '🇰🇬 Сом (KGS)'],
+        ['KZT', '🇰🇿 Тенге (KZT)'],
+        ['RUB', '🇷🇺 Рубль (RUB)'],
+        ['UZS', '🇺🇿 Сум (UZS)'],
+        ['USD', '💵 Доллар (USD)'],
+    ];
+    const current = state.me?.currency;
+    return `
+        <div class="fixed inset-0 z-50 flex items-end justify-center"
+             style="background:rgba(0,0,0,0.45)" id="currency-picker-overlay">
+            <div class="w-full max-w-md rounded-t-3xl pb-6 pt-3 px-4 sheet-enter"
+                 style="background:var(--surface)" onclick="event.stopPropagation()">
+                <div class="w-12 h-1 rounded-full mx-auto mb-3" style="background:var(--border)"></div>
+                <h3 class="text-base font-semibold mb-3" style="color:var(--text)">Выбери валюту</h3>
+                <div class="space-y-1">
+                    ${currencies.map(([code, label]) => `
+                        <button data-currency="${code}"
+                                class="currency-pick-btn w-full flex items-center justify-between
+                                       px-4 py-3 rounded-xl text-left text-[15px]
+                                       ${current === code ? 'font-semibold' : ''}"
+                                style="background:${current === code ? 'var(--accent-soft)' : 'transparent'};
+                                       color:${current === code ? 'var(--accent)' : 'var(--text)'}">
+                            <span>${label}</span>
+                            ${current === code ? icon('check', 'w-5 h-5') : ''}
+                        </button>
+                    `).join('')}
+                </div>
+            </div>
+        </div>`;
+}
+
+function attachCurrencyPickerHandlers() {
+    document.getElementById('currency-picker-overlay')?.addEventListener('click', () => {
+        state.currencyPickerOpen = false; render();
+    });
+    document.querySelectorAll('.currency-pick-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const code = btn.dataset.currency;
+            if (!code || code === state.me?.currency) {
+                state.currencyPickerOpen = false; render(); return;
+            }
+            try {
+                const res = await api('PATCH', '/me/currency', { currency: code });
+                if (res?.ok) {
+                    if (state.me) state.me.currency = res.currency;
+                    state.currencyPickerOpen = false;
+                    render();
+                    const tg = window.Telegram?.WebApp;
+                    tg?.HapticFeedback?.notificationOccurred?.('success');
+                }
+            } catch (e) {
+                const tg = window.Telegram?.WebApp;
+                if (tg?.showAlert) tg.showAlert(`Не удалось сменить валюту: ${e.message}`);
             }
         });
     });
+}
+
+
+// ----- Invite screen -----
+
+function buildInvite() {
+    const inv = state.invite;
+    if (!inv) {
+        // Грузим лениво
+        (async () => {
+            try { state.invite = await api('GET', '/me/invite'); render(); } catch (e) {}
+        })();
+        return `<div class="px-4 pt-6 text-gray-500">Загружаю...</div>`;
+    }
+    return `
+        <div class="px-4 pt-5">
+            <button class="text-[14px] mb-3 inline-flex items-center gap-1" style="color:var(--accent)"
+                    data-action="back_to_settings">${icon('chevron-left', 'w-4 h-4')} Настройки</button>
+            <h1 class="h-display mb-2">Пригласить друга</h1>
+            <p class="text-[14px] mb-5" style="color:var(--text-muted)">
+                Поделись ссылкой — когда друг откроет бота и нажмёт /start, обоим начислится
+                <b>${inv.bonus_days}</b> дней Premium.
+            </p>
+
+            <div class="rounded-2xl p-4 mb-4" style="background:var(--surface);border:1px solid var(--border)">
+                <p class="eyebrow mb-2">Твоя ссылка</p>
+                <p class="text-[13px] break-all font-mono mb-3" style="color:var(--text)">${inv.link}</p>
+                <div class="flex gap-2">
+                    <button data-action="invite_share"
+                            class="flex-1 py-2.5 rounded-xl text-white text-[14px] font-semibold"
+                            style="background:linear-gradient(135deg,#8b5cf6 0%,#6366f1 55%,#4f46e5 100%)">
+                        Поделиться
+                    </button>
+                    <button data-action="invite_copy"
+                            class="flex-1 py-2.5 rounded-xl text-[14px] font-semibold"
+                            style="background:var(--accent-soft);color:var(--accent)">
+                        Скопировать
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div class="rounded-2xl p-4" style="background:var(--surface);border:1px solid var(--border)">
+                    <p class="eyebrow mb-1">Приглашено</p>
+                    <p class="text-2xl font-bold" style="color:var(--text)">${inv.invited_count}</p>
+                </div>
+                <div class="rounded-2xl p-4" style="background:var(--surface);border:1px solid var(--border)">
+                    <p class="eyebrow mb-1">Бонусных дней</p>
+                    <p class="text-2xl font-bold" style="color:var(--accent)">${inv.invited_count * inv.bonus_days}</p>
+                </div>
+            </div>
+        </div>`;
+}
+
+function attachInviteHandlers() {
+    document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
+        el.addEventListener('click', () => { state.screen = 'settings'; render(); }));
+    document.querySelectorAll('[data-action="invite_copy"]').forEach(el =>
+        el.addEventListener('click', async () => {
+            const link = state.invite?.link;
+            if (!link) return;
+            try {
+                await navigator.clipboard.writeText(link);
+                const tg = window.Telegram?.WebApp;
+                tg?.HapticFeedback?.notificationOccurred?.('success');
+                el.textContent = 'Скопировано ✓';
+                setTimeout(() => { el.textContent = 'Скопировать'; }, 1500);
+            } catch (e) {}
+        }));
+    document.querySelectorAll('[data-action="invite_share"]').forEach(el =>
+        el.addEventListener('click', () => {
+            const link = state.invite?.link;
+            if (!link) return;
+            const tg = window.Telegram?.WebApp;
+            // Telegram WebApp.openTelegramLink с share-URL открывает диалог выбора чата.
+            if (tg?.openTelegramLink) {
+                const shareText = `Учёт трат без таблиц — бот распознаёт и сохраняет. +14 дней Premium по моей ссылке.`;
+                tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`);
+            } else if (navigator.share) {
+                navigator.share({ url: link, text: 'AI-Финансист' }).catch(() => {});
+            } else {
+                navigator.clipboard?.writeText(link);
+            }
+        }));
+}
+
+
+// ----- Help screen -----
+
+function buildHelp() {
+    return `
+        <div class="px-4 pt-5">
+            <button class="text-[14px] mb-3 inline-flex items-center gap-1" style="color:var(--accent)"
+                    data-action="back_to_settings">${icon('chevron-left', 'w-4 h-4')} Настройки</button>
+            <h1 class="h-display mb-4">Как пользоваться</h1>
+
+            <div class="rounded-2xl p-5 mb-4 space-y-3 text-[14px]" style="background:var(--surface);border:1px solid var(--border);color:var(--text)">
+                <p><b>Запись траты</b> — напиши в чате с ботом обычным сообщением:</p>
+                <ul class="space-y-1 ml-1" style="color:var(--text-muted)">
+                    <li>• «250 кофе»</li>
+                    <li>• «потратил 1500 на такси»</li>
+                    <li>• «зарплата 50000»</li>
+                </ul>
+                <p>Я разберу сумму, категорию и сохраню. В Mini App запись доступна через FAB «+».</p>
+            </div>
+
+            <div class="rounded-2xl p-5 mb-4 space-y-2 text-[14px]" style="background:var(--surface);border:1px solid var(--border);color:var(--text)">
+                <p><b>Распознавание</b></p>
+                <p style="color:var(--text-muted)">📷 Фото чека — пришли в чате, бот распознает.</p>
+                <p style="color:var(--text-muted)">🎙 Голосовое — то же самое.</p>
+                <p style="color:var(--text-muted)">📥 CSV — импорт транзакций (Premium и Pro).</p>
+            </div>
+
+            <div class="rounded-2xl p-5 text-[14px]" style="background:var(--surface);border:1px solid var(--border);color:var(--text)">
+                <p><b>AI-финансист</b></p>
+                <p style="color:var(--text-muted)">
+                    Спрашивай в чате: «где я слил больше всего за неделю?», «сколько на еду в мае?».
+                    Бот посчитает и ответит.
+                </p>
+            </div>
+
+            <p class="text-[12px] text-center mt-5" style="color:var(--text-faint)">
+                Вопросы — @sultanhodzjaevv
+            </p>
+        </div>`;
+}
+
+function attachHelpHandlers() {
+    document.querySelectorAll('[data-action="back_to_settings"]').forEach(el =>
+        el.addEventListener('click', () => { state.screen = 'settings'; render(); }));
 }
 
 

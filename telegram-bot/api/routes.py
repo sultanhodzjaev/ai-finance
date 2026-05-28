@@ -50,6 +50,69 @@ async def get_me(x_init_data: str = Header(...)):
     }
 
 
+# Список валют дублирует handlers.onboarding.CURRENCIES — единый источник правды
+# был бы лучше, но для пяти строк это overkill.
+CURRENCY_LABELS = {
+    "KGS": "🇰🇬 Сом (KGS)",
+    "KZT": "🇰🇿 Тенге (KZT)",
+    "RUB": "🇷🇺 Рубль (RUB)",
+    "UZS": "🇺🇿 Сум (UZS)",
+    "USD": "💵 Доллар (USD)",
+}
+
+
+@router.get("/currencies")
+async def list_currencies():
+    """Список доступных валют для picker'а в Mini App."""
+    return {"currencies": [{"code": c, "label": l} for c, l in CURRENCY_LABELS.items()]}
+
+
+@router.patch("/me/currency")
+async def update_currency(payload: dict, x_init_data: str = Header(...)):
+    """Смена валюты юзера прямо из Mini App. Старые транзакции не пересчитываются."""
+    from services.storage import update_user_currency, log_event
+    telegram_id = require_auth(x_init_data)
+    ensure_user(x_init_data, telegram_id)
+    code = (payload.get("currency") or "").upper()
+    if code not in CURRENCY_LABELS:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="unknown currency")
+    update_user_currency(telegram_id, code)
+    log_event(telegram_id, "currency_set", {"currency": code, "source": "miniapp"})
+    return {"ok": True, "currency": code}
+
+
+@router.get("/me/invite")
+async def get_invite(x_init_data: str = Header(...)):
+    """Реферальная ссылка юзера + счётчик приглашённых."""
+    import os
+    from services.storage import _client
+    telegram_id = require_auth(x_init_data)
+    user = ensure_user(x_init_data, telegram_id)
+    code = user.get("referral_code")
+    if not code:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="referral code not assigned yet")
+
+    bot_username = os.getenv("BOT_USERNAME", "smartcash_ai_bot")
+    link = f"https://t.me/{bot_username}?start=ref_{code}"
+    try:
+        res = _client().table("events").select("id", count="exact") \
+            .eq("telegram_id", telegram_id) \
+            .eq("type", "referral_invited") \
+            .execute()
+        invited = res.count or 0
+    except Exception:
+        invited = 0
+
+    return {
+        "link":          link,
+        "code":          code,
+        "invited_count": invited,
+        "bonus_days":    14,
+    }
+
+
 @router.get("/transactions")
 async def list_transactions(
     x_init_data: str = Header(...),
