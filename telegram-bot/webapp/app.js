@@ -282,6 +282,7 @@ function render() {
             ${state.screen === 'add'       ? buildAdd()       : ''}
             ${state.screen === 'plan'      ? buildPlan()      : ''}
             ${state.screen === 'upgrade'   ? buildUpgrade()   : ''}
+            ${state.screen === 'settings'  ? buildSettings()  : ''}
         </div>
         ${buildNav()}
         ${buildBottomSheet()}
@@ -300,6 +301,7 @@ function render() {
     if (state.screen === 'add')       attachAddHandlers();
     if (state.screen === 'plan')      attachPlanHandlers();
     if (state.screen === 'upgrade')   attachUpgradeHandlers();
+    if (state.screen === 'settings')  attachSettingsHandlers();
     if (state.selectedTx)             attachSheetHandlers();
 }
 
@@ -310,25 +312,30 @@ function buildNav() {
     const d = state.screen === 'dashboard',
           h = state.screen === 'history',
           p = state.screen === 'plan' || state.screen === 'upgrade';
-    // FAB-кнопка «+» абсолютно центрирована в nav и приподнята над ней.
-    // Между History и Plan кладём spacer той же ширины, что и FAB, чтобы текст
-    // соседних кнопок не уезжал под него на узких экранах.
+    const s = state.screen === 'settings';
+    // 5-колоночная raскладка: 2 кнопки слева, FAB в центре (3-й колонке), 2 справа.
+    // grid grid-cols-5 даёт идеальное симметричное распределение — каждая колонка
+    // ровно 20% ширины, центр nav совпадает с центром col 3 (где FAB).
     return `
         <nav class="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-100
-                    flex items-center justify-around px-1 py-1 z-40 shadow-lg"
+                    grid grid-cols-5 items-center px-1 py-1 z-40 shadow-lg"
              style="padding-bottom:max(env(safe-area-inset-bottom),4px)">
-            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 rounded-xl
                            ${d ? 'text-indigo-600' : 'text-gray-400'}" data-screen="dashboard">
                 ${icon('layout-dashboard', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">Дашборд</span>
             </button>
-            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 rounded-xl
                            ${h ? 'text-indigo-600' : 'text-gray-400'}" data-screen="history">
                 ${icon('clock', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">История</span>
             </button>
-            <div aria-hidden="true" class="w-16 h-1"></div>
-            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl
+            <div aria-hidden="true"></div>
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 rounded-xl
                            ${p ? 'text-indigo-600' : 'text-gray-400'}" data-screen="plan">
                 ${icon('crown', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">План</span>
+            </button>
+            <button class="nav-btn flex flex-col items-center gap-0.5 py-2 rounded-xl
+                           ${s ? 'text-indigo-600' : 'text-gray-400'}" data-screen="settings">
+                ${icon('settings', 'w-6 h-6')}<span class="text-xs font-medium mt-0.5">Настройки</span>
             </button>
             <button class="nav-btn absolute left-1/2 -translate-x-1/2 -top-4"
                     data-screen="add" aria-label="Добавить трату или доход"
@@ -1465,6 +1472,86 @@ function attachUpgradeHandlers() {
         });
     });
 }
+
+// ============================================================
+// ЭКРАН: НАСТРОЙКИ
+// ============================================================
+function buildSettings() {
+    const currency = state.me?.currency || '—';
+    const planTitle = (() => {
+        const map = { trial: 'Trial', free: 'Free', premium: 'Premium', pro: 'Pro', owner: 'Owner' };
+        return map[state.plan?.plan] || state.plan?.plan || '—';
+    })();
+    const row = (iconName, title, value, dataAction, soonText) => `
+        <button class="settings-row w-full flex items-center gap-3 px-4 py-3.5 text-left
+                       hover:bg-gray-50 dark:hover:bg-white/5 transition-colors"
+                ${dataAction ? `data-action="${dataAction}"` : 'disabled'}>
+            <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+                 style="background:var(--accent-soft);color:var(--accent)">
+                ${icon(iconName, 'w-4 h-4')}
+            </div>
+            <div class="flex-1 min-w-0">
+                <p class="text-[14px] font-medium truncate" style="color:var(--text)">${title}</p>
+                ${value ? `<p class="text-[12px] truncate" style="color:var(--text-faint)">${value}</p>` : ''}
+            </div>
+            ${soonText
+                ? `<span class="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full font-semibold"
+                          style="background:var(--accent-soft);color:var(--accent)">${soonText}</span>`
+                : icon('chevron-right', 'w-4 h-4 text-gray-300')}
+        </button>`;
+
+    return `
+        <div class="px-4 pt-5">
+            <h1 class="h-display mb-5">Настройки</h1>
+
+            <p class="eyebrow mb-2 mt-1">Аккаунт</p>
+            <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
+                 style="background:var(--surface);border:1px solid var(--border)">
+                ${row('coins',  'Валюта',       currency, 'settings_currency')}
+                ${row('crown',  'Подписка',     planTitle, 'settings_plan')}
+                ${row('gift',   'Пригласить друга +14 дней Premium', '', 'settings_invite')}
+            </div>
+
+            <p class="eyebrow mb-2 mt-5">Управление</p>
+            <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
+                 style="background:var(--surface);border:1px solid var(--border)">
+                ${row('target',           'Бюджеты по категориям',  '', null, 'скоро')}
+                ${row('tags',             'Кастомные категории',     '', null, 'скоро')}
+                ${row('repeat',           'Регулярные платежи',      '', null, 'скоро')}
+            </div>
+
+            <p class="eyebrow mb-2 mt-5">Прочее</p>
+            <div class="rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/5"
+                 style="background:var(--surface);border:1px solid var(--border)">
+                ${row('life-buoy', 'Помощь', '', 'settings_help')}
+            </div>
+
+            <p class="text-[11px] text-center mt-6" style="color:var(--text-faint)">
+                AI-Финансист · botfinance.xyz
+            </p>
+        </div>`;
+}
+
+function attachSettingsHandlers() {
+    document.querySelectorAll('[data-action]').forEach(el => {
+        el.addEventListener('click', () => {
+            const action = el.dataset.action;
+            const tg = window.Telegram?.WebApp;
+            if (action === 'settings_plan')     { state.screen = 'plan'; render(); }
+            else if (action === 'settings_currency' || action === 'settings_invite' || action === 'settings_help') {
+                // Эти действия пока живут только в чат-боте — закрываем Mini App и подсказываем команду.
+                const hints = {
+                    settings_currency: 'Открой /settings → «Сменить валюту» в чате с ботом.',
+                    settings_invite:   'Открой /invite в чате с ботом — он пришлёт твою реф-ссылку.',
+                    settings_help:     'Открой /help в чате с ботом.',
+                };
+                if (tg?.showAlert) tg.showAlert(hints[action]);
+                else alert(hints[action]);
+            }
+        });
+    });
+}
+
 
 // ============================================================
 // ЗАПУСК
