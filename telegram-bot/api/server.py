@@ -1,3 +1,4 @@
+import os
 import time
 from collections import defaultdict, deque
 
@@ -10,7 +11,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from api.routes import router
 from api.webhooks import router as webhooks_router
 
-app = FastAPI(title="AI-финансист Mini App")
+# В проде /docs и /openapi.json торчат в интернет и раскрывают все эндпоинты,
+# схемы и параметры — удобство для дев-окружения, лишний инфо-leak для атакующего.
+# В dev оставляем (ENV=dev), на проде — None.
+_IS_DEV = os.getenv("ENV", "prod").lower() == "dev"
+
+app = FastAPI(
+    title="AI-финансист Mini App",
+    docs_url="/docs" if _IS_DEV else None,
+    redoc_url="/redoc" if _IS_DEV else None,
+    openapi_url="/openapi.json" if _IS_DEV else None,
+)
 
 
 class IPRateLimitMiddleware(BaseHTTPMiddleware):
@@ -62,13 +73,25 @@ app.add_middleware(NoCacheStaticMiddleware)
 # Rate-limit раньше CORS, чтобы 429 уходил без лишних заголовков
 app.add_middleware(IPRateLimitMiddleware)
 
-# CORS — разрешаем запросы от Telegram WebApp
+# CORS — разрешаем запросы только с доверенных origin'ов. Раньше стояло "*",
+# что давало любому стороннему сайту слать запросы к нашему API от имени юзера
+# (если у злоумышленника есть валидный initData). Telegram WebApp на iOS/Android
+# использует "https://web.telegram.org"; для Desktop и нашей собственной верстки
+# Mini App на botfinance.xyz — добавлено отдельно. Доп. origin можно прокинуть
+# через env ALLOWED_ORIGINS=...,... (запятая) — для миграции домена и стейджа.
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://web.telegram.org",
+    "https://botfinance.xyz",
+]
+_extra_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+_ALLOWED_ORIGINS = _DEFAULT_ALLOWED_ORIGINS + _extra_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["X-Init-Data", "Content-Type"],
 )
 
 # Подключаем API-роуты (/miniapp/api/*) и внешние webhook'и (/webhook/*)
