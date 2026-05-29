@@ -21,11 +21,19 @@ def _admin_id() -> int | None:
 
 async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
     """Создаёт инвойс на подписку и отдаёт юзеру инлайн-кнопку с paymentUrl."""
+    # Гасим spinner СРАЗУ: Lava create_subscription может занять 10-20с, а
+    # callback query валидна только 30с. Без раннего answer() Telegram дропает
+    # ответ с TelegramBadRequest: query is too old. После этого не зовём
+    # callback.answer() повторно — ошибки/успех показываем обычным message.
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     offer_id = plans.LAVA_OFFER_IDS.get(tier)
     price = plans.PRICE_USD.get(tier)
-    title = plans.PLAN_TITLE.get(tier, tier)
     if not offer_id or not price:
-        await callback.answer("План недоступен", show_alert=True)
+        await callback.message.answer("План недоступен.")
         return
 
     storage.log_event(callback.from_user.id, "upgrade_clicked", {"tier": tier, "provider": "lava"})
@@ -35,9 +43,8 @@ async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
         offer_id=offer_id,
     )
     if not invoice or not invoice.get("paymentUrl"):
-        await callback.answer(
-            "Не удалось создать счёт. Попробуй ещё раз через минуту.",
-            show_alert=True,
+        await callback.message.answer(
+            "⚠️ Не удалось создать счёт. Попробуй ещё раз через минуту."
         )
         return
 
@@ -64,7 +71,6 @@ async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
         parse_mode="HTML",
         reply_markup=kb,
     )
-    await callback.answer("Открываю оплату…")
 
 
 @router.callback_query(F.data == "upgrade_premium")

@@ -53,7 +53,7 @@ def get_user(telegram_id: int) -> dict | None:
     """Возвращает пользователя по Telegram ID или None."""
     try:
         res = _client().table("users").select("*").eq("telegram_id", telegram_id).maybe_single().execute()
-        return res.data
+        return res.data if res else None
     except Exception as e:
         logger.error(f"get_user({telegram_id}): {e}")
         return None
