@@ -249,8 +249,18 @@ async def poll_lava_invoices(bot: Bot) -> None:
 
         try:
             # activate_subscription сам залогирует subscription_paid с contract_id —
-            # это и есть наша идемпотентность для следующего тика
-            storage.activate_subscription(telegram_id, tier, days=30, contract_id=contract_id)
+            # это и есть наша идемпотентность для следующего тика.
+            # При ошибке БД (например, plan не в users_plan_check) возвращает None —
+            # тогда не шлём «активирована», иначе юзер получит спам уведомлений
+            # каждую минуту, пока БД-ошибка не починена.
+            result = storage.activate_subscription(telegram_id, tier, days=30, contract_id=contract_id)
+            if result is None:
+                logger.warning(
+                    f"poll_lava: activate_subscription returned None for tg={telegram_id} "
+                    f"tier={tier} contract={contract_id} — skip notification (DB error?)"
+                )
+                errors += 1
+                continue
             title = plans.PLAN_TITLE.get(tier, tier)
             if is_recurring:
                 text = (

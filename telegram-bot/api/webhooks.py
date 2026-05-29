@@ -88,7 +88,11 @@ async def lava_webhook(request: Request) -> JSONResponse:
         if contract_id and storage.has_processed_invoice(str(contract_id)):
             logger.info("lava webhook payment.success: contract %s already processed, skip", contract_id)
             return JSONResponse({"ok": True})
-        storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
+        result = storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
+        if result is None:
+            logger.error("lava webhook payment.success: activate_subscription returned None for tg=%s tier=%s contract=%s — skip notification",
+                         telegram_id, tier, contract_id)
+            return JSONResponse({"ok": True})
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🎉 <b>Подписка {title} активирована!</b>\n\n"
@@ -106,7 +110,11 @@ async def lava_webhook(request: Request) -> JSONResponse:
         if contract_id and storage.has_processed_invoice(str(contract_id)):
             logger.info("lava webhook recurring: contract %s already processed, skip", contract_id)
             return JSONResponse({"ok": True})
-        storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
+        result = storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
+        if result is None:
+            logger.error("lava webhook recurring: activate_subscription returned None for tg=%s tier=%s contract=%s — skip notification",
+                         telegram_id, tier, contract_id)
+            return JSONResponse({"ok": True})
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🔄 <b>Подписка {title} продлена на 30 дней.</b>\n"
