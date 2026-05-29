@@ -59,7 +59,8 @@ async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
         f"{_build_tier_summary(tier)}\n\n"
         f"Жми кнопку ниже, оплати картой — после оплаты бот сам активирует "
         f"подписку. Списание каждый месяц автоматически, можно отменить в "
-        f"любой момент.",
+        f"любой момент.\n\n"
+        f"⏱ <i>Подтверждение придёт в течение 1 минуты после оплаты.</i>",
         parse_mode="HTML",
         reply_markup=kb,
     )
