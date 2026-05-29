@@ -85,7 +85,10 @@ async def lava_webhook(request: Request) -> JSONResponse:
         if not tier:
             logger.warning("lava webhook payment.success: unknown tier for amount=%s tg=%s", amount, telegram_id)
             return JSONResponse({"ok": True})
-        storage.activate_subscription(telegram_id, tier, days=30)
+        if contract_id and storage.has_processed_invoice(str(contract_id)):
+            logger.info("lava webhook payment.success: contract %s already processed, skip", contract_id)
+            return JSONResponse({"ok": True})
+        storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🎉 <b>Подписка {title} активирована!</b>\n\n"
@@ -100,7 +103,10 @@ async def lava_webhook(request: Request) -> JSONResponse:
         if not tier:
             logger.warning("lava webhook recurring: unknown tier for amount=%s tg=%s", amount, telegram_id)
             return JSONResponse({"ok": True})
-        storage.activate_subscription(telegram_id, tier, days=30)
+        if contract_id and storage.has_processed_invoice(str(contract_id)):
+            logger.info("lava webhook recurring: contract %s already processed, skip", contract_id)
+            return JSONResponse({"ok": True})
+        storage.activate_subscription(telegram_id, tier, days=30, contract_id=str(contract_id) if contract_id else None)
         title = plans.PLAN_TITLE.get(tier, tier)
         await _notify(bot, telegram_id,
                       f"🔄 <b>Подписка {title} продлена на 30 дней.</b>\n"
