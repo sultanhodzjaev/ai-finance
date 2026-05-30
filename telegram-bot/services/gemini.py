@@ -75,14 +75,17 @@ async def _generate(
     last_error: Exception = RuntimeError("Нет доступных моделей")
 
     for model in GEMINI_MODELS:
-        url = f"{GEMINI_API_BASE}/{model}:generateContent?key={key}"
+        # Ключ кладём в заголовок, а не в querystring — иначе он палится
+        # в httpx INFO-логах (`GET ...?key=...`) и в любом access-log по пути.
+        url = f"{GEMINI_API_BASE}/{model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": key,
+        }
 
         for attempt in range(retries):
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    url, json=payload,
-                    headers={"Content-Type": "application/json"},
-                )
+                response = await client.post(url, json=payload, headers=headers)
 
             if response.status_code == 404:
                 logger.warning(f"Модель {model} недоступна (404), пробую следующую...")
