@@ -1468,9 +1468,13 @@ function buildUpgrade() {
             : recommended
                 ? '<span class="absolute -top-2.5 left-4 bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full font-medium">Популярный</span>'
                 : '';
-        const iconBg = isCurrent ? 'bg-emerald-100 text-emerald-600'
-                    : recommended ? 'bg-indigo-100 text-indigo-600'
-                    : 'bg-gray-100 text-gray-700';
+        // Иконка-тариф: зелёный — если это «Твой план», иначе семантический цвет
+        // тарифа (violet для Premium, золото для Pro), независимо от recommended.
+        const iconStyle = isCurrent
+            ? 'background:rgba(16,185,129,0.16);color:#10b981'
+            : key === 'pro'
+                ? 'background:rgba(252,211,77,0.18);color:#fcd34d'
+                : 'background:var(--accent-soft);color:var(--accent)';
         const cta = isCurrent
             ? `<button class="w-full bg-gray-100 text-gray-500 py-2.5 rounded-xl font-semibold cursor-default" disabled>
                    Это твой текущий тариф
@@ -1484,7 +1488,7 @@ function buildUpgrade() {
                 ${badge}
                 <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 ${iconBg} rounded-xl flex items-center justify-center">
+                        <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="${iconStyle}">
                             ${icon(iconName, 'w-5 h-5')}
                         </div>
                         <div>
