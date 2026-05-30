@@ -80,7 +80,7 @@ def main_inline_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🤖 AI-финансист", callback_data="ask_advisor"),
             InlineKeyboardButton(text="⚙️ Настройки",    callback_data="open_settings"),
         ],
-        [InlineKeyboardButton(text="🎁 Пригласить друга +14 дней Premium", callback_data="show_invite")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга +7 дней Premium", callback_data="show_invite")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

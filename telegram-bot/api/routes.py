@@ -227,7 +227,7 @@ async def get_invite(x_init_data: str = Header(...)):
         "link":          link,
         "code":          code,
         "invited_count": invited,
-        "bonus_days":    14,
+        "bonus_days":    7,
     }
 
 
@@ -434,7 +434,7 @@ async def get_plan(x_init_data: str = Header(...)):
         "referral": {
             "code":         referral_code,
             "invite_link":  invite_link,
-            "bonus_days":   14,
+            "bonus_days":   7,
         },
     }
 

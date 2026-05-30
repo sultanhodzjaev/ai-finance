@@ -10,7 +10,7 @@ from handlers.onboarding import currency_picker_kb, main_inline_kb
 logger = logging.getLogger(__name__)
 router = Router()
 
-REFERRAL_BONUS_DAYS = 14
+REFERRAL_BONUS_DAYS = 7
 
 
 def _parse_start_param(text: str | None) -> str:

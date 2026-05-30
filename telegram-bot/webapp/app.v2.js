@@ -1301,11 +1301,11 @@ function buildPlan() {
     const referralBlock = ref.invite_link ? `
         <div class="bg-white rounded-2xl p-4 shadow-sm mt-4 border border-emerald-100">
             <h2 class="font-semibold text-gray-700 mb-2 text-sm flex items-center gap-2">
-                ${icon('gift', 'w-4 h-4 text-emerald-500')} Пригласи друга — обоим +${ref.bonus_days || 14} дней Premium
+                ${icon('gift', 'w-4 h-4 text-emerald-500')} Пригласи друга — обоим +${ref.bonus_days || 7} дней Premium
             </h2>
             <p class="text-xs text-gray-500 mb-3">
                 Когда друг откроет бота по твоей ссылке и сделает /start — вам обоим автоматически
-                начислится Premium-подписка на ${ref.bonus_days || 14} дней.
+                начислится Premium-подписка на ${ref.bonus_days || 7} дней.
             </p>
             <button id="share-referral-btn"
                     class="w-full bg-emerald-500 text-white py-2.5 rounded-xl font-semibold
@@ -1392,7 +1392,7 @@ function attachPlanHandlers() {
         document.getElementById('share-referral-btn')?.addEventListener('click', () => {
             const text = encodeURIComponent(
                 `Веду учёт трат через AI-Финансиста. Кидаешь ему «250 на обед» — он сам разбирает. ` +
-                `Открой по ссылке — нам обоим дадут 14 дней Premium бесплатно.`,
+                `Открой по ссылке — нам обоим дадут 7 дней Premium бесплатно.`,
             );
             const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${text}`;
             if (tg?.openTelegramLink) tg.openTelegramLink(shareUrl);
@@ -1557,7 +1557,7 @@ function buildSettings() {
                  style="background:var(--surface);border:1px solid var(--border)">
                 ${row('coins',  'Валюта',       currency, 'settings_currency')}
                 ${row('crown',  'Подписка',     planTitle, 'settings_plan')}
-                ${row('gift',   'Пригласить друга +14 дней Premium', '', 'settings_invite')}
+                ${row('gift',   'Пригласить друга +7 дней Premium', '', 'settings_invite')}
             </div>
 
             <p class="eyebrow mb-2 mt-5">Управление</p>
@@ -1737,7 +1737,7 @@ function attachInviteHandlers() {
             const tg = window.Telegram?.WebApp;
             // Telegram WebApp.openTelegramLink с share-URL открывает диалог выбора чата.
             if (tg?.openTelegramLink) {
-                const shareText = `Учёт трат без таблиц — бот распознаёт и сохраняет. +14 дней Premium по моей ссылке.`;
+                const shareText = `Учёт трат без таблиц — бот распознаёт и сохраняет. +7 дней Premium по моей ссылке.`;
                 tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`);
             } else if (navigator.share) {
                 navigator.share({ url: link, text: 'AI-Финансист' }).catch(() => {});

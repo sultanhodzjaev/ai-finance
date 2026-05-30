@@ -11,7 +11,7 @@ from services import storage
 logger = logging.getLogger(__name__)
 router = Router()
 
-REFERRAL_BONUS_DAYS = 14
+REFERRAL_BONUS_DAYS = 7
 
 
 def _bot_username() -> str:
@@ -29,7 +29,16 @@ def _invite_text(telegram_id: int) -> str | None:
         return None
     code = user.get("referral_code")
     if not code:
-        return None
+        # На случай если миграция/инсёрт оставили код пустым — генерим on-the-fly,
+        # чтобы кнопка «Пригласить друга» не отдавала «Сначала нажми /start» по кругу.
+        import hashlib, time as _time
+        code = hashlib.md5(f"{telegram_id}{_time.time()}".encode()).hexdigest()[:8]
+        try:
+            from services.storage import _client
+            _client().table("users").update({"referral_code": code}).eq("telegram_id", telegram_id).execute()
+        except Exception as e:
+            logger.warning(f"backfill referral_code({telegram_id}): {e}")
+            return None
 
     link = _ref_link(code)
     try:
