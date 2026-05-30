@@ -635,14 +635,16 @@ async def ask_financial_advisor(
     )
 
     try:
-        # thinking_budget=0 — отключаем «думанье» 2.5-flash. Без этого модель
-        # съедала весь maxOutputTokens на скрытый reasoning и отдавала юзеру
-        # оборванное предложение. Плюс экономия — thinking-токены дороже.
-        # max_output_tokens=1500 — на развёрнутый HTML с топами и аномалиями.
+        # thinking_budget=512 — даём модели немного «подумать» (чтобы корректно
+        # классифицировать вопрос про финансы и не сорваться в safety-guard),
+        # но без runaway-расхода. max_output_tokens=3000 — с запасом и на
+        # thinking (входит в лимит), и на развёрнутый HTML-ответ с топами
+        # и аномалиями. Без thinking совсем модель тупила и отшивала «как
+        # накопить» / «как отдать долг» как «не про финансы».
         return await _generate(
             [{"parts": [{"text": prompt}]}],
-            max_output_tokens=1500,
-            thinking_budget=0,
+            max_output_tokens=3000,
+            thinking_budget=512,
         )
     except Exception as e:
         logger.error(f"Ошибка при запросе к AI-финансисту: {e}")
