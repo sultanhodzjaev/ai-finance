@@ -47,6 +47,7 @@ async def _generate(
     retries: int = 3,
     max_output_tokens: int | None = None,
     response_mime_type: str | None = None,
+    thinking_budget: int | None = None,
 ) -> str:
     """
     Отправляет запрос к Gemini REST API и возвращает текст ответа.
@@ -56,6 +57,9 @@ async def _generate(
     response_mime_type — если задан "application/json", Gemini вернёт валидный
     JSON-объект, а не текст с возможной markdown-обёрткой или плейсхолдерами
     из примера в промпте (без этого 2.5-flash иногда копирует «число» как литерал).
+    thinking_budget — лимит на thinking-токены (только Gemini 2.5+). 0 = выключить
+    thinking совсем, что и дешевле, и гарантирует что весь maxOutputTokens пойдёт
+    на видимый ответ (иначе модель ест бюджет на reasoning и обрывает фразу).
     """
     payload: dict = {"contents": contents}
     gen_config: dict = {}
@@ -63,6 +67,8 @@ async def _generate(
         gen_config["maxOutputTokens"] = max_output_tokens
     if response_mime_type:
         gen_config["responseMimeType"] = response_mime_type
+    if thinking_budget is not None:
+        gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
     if gen_config:
         payload["generationConfig"] = gen_config
     key = _api_key()
@@ -629,9 +635,15 @@ async def ask_financial_advisor(
     )
 
     try:
-        # max_output_tokens=1024 — для развёрнутого HTML-ответа с топами и аномалиями
-        # хватает; больше — обычно простыня. Cost-guard от runaway генерации.
-        return await _generate([{"parts": [{"text": prompt}]}], max_output_tokens=1024)
+        # thinking_budget=0 — отключаем «думанье» 2.5-flash. Без этого модель
+        # съедала весь maxOutputTokens на скрытый reasoning и отдавала юзеру
+        # оборванное предложение. Плюс экономия — thinking-токены дороже.
+        # max_output_tokens=1500 — на развёрнутый HTML с топами и аномалиями.
+        return await _generate(
+            [{"parts": [{"text": prompt}]}],
+            max_output_tokens=1500,
+            thinking_budget=0,
+        )
     except Exception as e:
         logger.error(f"Ошибка при запросе к AI-финансисту: {e}")
         raise
