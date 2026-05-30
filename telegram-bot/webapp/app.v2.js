@@ -109,6 +109,26 @@ async function api(method, path, body = null) {
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
+
+/**
+ * Тактильный фидбэк через Telegram WebApp.
+ * Делает приложение «настоящим» на iOS — тапы ощущаются как в нативке.
+ * kind: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft' | 'success' | 'warning' | 'error'.
+ */
+function haptic(kind = 'light') {
+    try {
+        const hf = window.Telegram?.WebApp?.HapticFeedback;
+        if (!hf) return;
+        if (kind === 'success' || kind === 'warning' || kind === 'error') {
+            hf.notificationOccurred?.(kind);
+        } else if (kind === 'selection') {
+            hf.selectionChanged?.();
+        } else {
+            hf.impactOccurred?.(kind);
+        }
+    } catch {}
+}
+
 function fmt(amount) {
     return `${Math.round(Math.abs(amount)).toLocaleString('ru-RU')} ${state.me?.currency || 'KGS'}`;
 }
@@ -334,6 +354,7 @@ function render() {
     if (state.screen === 'dashboard') {
         renderCharts();
         document.getElementById('open-upgrade-from-dash')?.addEventListener('click', () => {
+            haptic('light');
             goTo('plan');
         });
         attachDashboardPeriodHandlers();
@@ -397,6 +418,7 @@ function buildNav() {
 function attachNavHandlers() {
     document.querySelectorAll('.nav-btn').forEach(btn =>
         btn.addEventListener('click', () => {
+            haptic(btn.classList.contains('fab-plus') ? 'medium' : 'light');
             const target = btn.dataset.screen;
             if (target !== 'history') { state.periodFilter = 'month'; state.typeFilter = 'all'; }
             state.selectedTx = null; state.editingTx = false;
@@ -463,17 +485,11 @@ function buildDashboard() {
                 </div>
             </div>
 
-            <!-- Переключатель периода -->
-            <div class="flex gap-2 mb-5 overflow-x-auto pb-1 -mx-1 px-1">
+            <!-- Переключатель периода (iOS-style segmented control) -->
+            <div class="seg-control mb-5">
                 ${periodOpts.map(f=>`
-                    <button class="dash-period-btn flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold border tracking-wide
-                        ${state.dashboardPeriod===f.key
-                            ? 'text-white'
-                            : 'bg-white text-gray-600 border-gray-200'}"
-                        ${state.dashboardPeriod===f.key
-                            ? 'style="background:var(--accent);border-color:var(--accent)"'
-                            : ''}
-                        data-period="${f.key}">${f.label}</button>
+                    <button class="dash-period-btn seg-btn ${state.dashboardPeriod===f.key ? 'active' : ''}"
+                            data-period="${f.key}">${f.label}</button>
                 `).join('')}
             </div>
 
@@ -514,20 +530,24 @@ function buildDashboard() {
             </div>
 
             ${state.plan?.limits?.mini_app_analytics === 'basic' ? `
-                <div class="bg-white rounded-2xl p-4 shadow-sm mb-4 border border-gray-100">
-                    <p class="text-sm text-gray-500">
-                        ${icon('lock', 'inline w-4 h-4 mr-1 text-gray-400')}
-                        Полная аналитика — графики по категориям и дням, экспорт CSV —
-                        доступны на Premium. <span class="text-indigo-600 cursor-pointer" id="open-upgrade-from-dash">Открыть план →</span>
+                <div class="rounded-2xl p-4 mb-4 flex items-start gap-3"
+                     style="background:var(--accent-soft);border:1px solid var(--border)">
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                         style="background:var(--accent);color:#fff">
+                        ${icon('lock', 'w-4 h-4')}
+                    </div>
+                    <p class="text-sm" style="color:var(--text-muted)">
+                        Полная аналитика — графики по категориям и дням, экспорт CSV — доступны на Premium.
+                        <span class="font-semibold cursor-pointer" style="color:var(--accent)" id="open-upgrade-from-dash">Открыть план →</span>
                     </p>
                 </div>
             ` : ''}
 
             ${periodTxs.length === 0 ? `
-                <div class="bg-white rounded-2xl p-8 text-center shadow-sm">
-                    <div class="text-4xl mb-3">🎉</div>
-                    <p class="font-semibold text-gray-700">За этот период операций нет</p>
-                    <p class="text-sm text-gray-400 mt-1">Запиши операцию через бота или «+», либо смени период выше</p>
+                <div class="rounded-2xl p-8 text-center" style="background:var(--surface);border:1px solid var(--border)">
+                    <div class="empty-icon">${icon('sparkles', 'w-6 h-6')}</div>
+                    <p class="font-semibold" style="color:var(--text)">За этот период операций нет</p>
+                    <p class="text-sm mt-1" style="color:var(--text-faint)">Запиши операцию через бота или «+», либо смени период выше</p>
                 </div>
             ` : `
                 ${state.plan?.limits?.mini_app_analytics === 'basic' ? '' : `
@@ -750,22 +770,20 @@ function buildHistory() {
 
     return `
         <div class="px-4 pt-5">
-            <h1 class="text-2xl font-bold text-gray-900 mb-4">История</h1>
+            <h1 class="h-display mb-4">История</h1>
 
             <!-- Фильтр периода -->
-            <div class="flex gap-2 mb-2 overflow-x-auto pb-1 -mx-1 px-1">
+            <div class="seg-control mb-2">
                 ${periodOpts.map(f=>`
-                    <button class="period-btn flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border
-                        ${state.periodFilter===f.key ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}"
+                    <button class="period-btn seg-btn ${state.periodFilter===f.key ? 'active' : ''}"
                         data-period="${f.key}">${f.label}</button>
                 `).join('')}
             </div>
 
             <!-- Фильтр типа -->
-            <div class="flex gap-2 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+            <div class="seg-control mb-4">
                 ${typeOpts.map(f=>`
-                    <button class="type-btn flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium border
-                        ${state.typeFilter===f.key ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200'}"
+                    <button class="type-btn seg-btn ${state.typeFilter===f.key ? 'active' : ''}"
                         data-type="${f.key}">${f.label}</button>
                 `).join('')}
             </div>
@@ -810,6 +828,7 @@ function buildTxRow(tx) {
 function attachDashboardPeriodHandlers() {
     document.querySelectorAll('.dash-period-btn').forEach(btn =>
         btn.addEventListener('click', () => {
+            haptic('selection');
             const p = btn.dataset.period;
             if (p === 'custom') {
                 // Открываем пикер: дефолт — текущий месяц, либо последний выбранный диапазон
@@ -880,10 +899,10 @@ function attachRangePickerHandlers() {
 
 function attachHistoryHandlers() {
     document.querySelectorAll('.period-btn').forEach(btn =>
-        btn.addEventListener('click', () => { state.periodFilter = btn.dataset.period; render(); })
+        btn.addEventListener('click', () => { haptic('selection'); state.periodFilter = btn.dataset.period; render(); })
     );
     document.querySelectorAll('.type-btn').forEach(btn =>
-        btn.addEventListener('click', () => { state.typeFilter = btn.dataset.type; render(); })
+        btn.addEventListener('click', () => { haptic('selection'); state.typeFilter = btn.dataset.type; render(); })
     );
     document.querySelectorAll('.tx-row').forEach(row =>
         row.addEventListener('click', () => {
@@ -911,18 +930,18 @@ function buildAdd() {
 
     return `
         <div class="px-4 pt-5">
-            <h1 class="text-2xl font-bold text-gray-900 mb-4">${title}</h1>
+            <h1 class="h-display mb-4">${title}</h1>
 
             <!-- Переключатель Расход / Доход -->
-            <div class="flex bg-gray-100 rounded-2xl p-1 mb-5 gap-1">
+            <div class="seg-control mb-5">
                 <button id="toggle-expense"
-                    class="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all
-                           ${!isIncome ? 'bg-white text-red-600 shadow' : 'text-gray-500'}">
+                    class="seg-btn ${!isIncome ? 'active' : ''}"
+                    style="${!isIncome ? 'color:var(--negative)' : ''}">
                     💸 Расход
                 </button>
                 <button id="toggle-income"
-                    class="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all
-                           ${isIncome ? 'bg-white text-green-600 shadow' : 'text-gray-500'}">
+                    class="seg-btn ${isIncome ? 'active' : ''}"
+                    style="${isIncome ? 'color:var(--positive)' : ''}">
                     💰 Доход
                 </button>
             </div>
@@ -967,15 +986,16 @@ function buildAdd() {
 function attachAddHandlers() {
     // Переключатель типа
     document.getElementById('toggle-expense')?.addEventListener('click', () => {
-        state.addType = 'expense'; render();
+        haptic('selection'); state.addType = 'expense'; render();
     });
     document.getElementById('toggle-income')?.addEventListener('click', () => {
-        state.addType = 'income'; render();
+        haptic('selection'); state.addType = 'income'; render();
     });
 
     // Выбор категории
     document.querySelectorAll('#add-cat-grid .cat-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            haptic('selection');
             document.querySelectorAll('#add-cat-grid .cat-btn').forEach(b => b.classList.remove('selected'));
             btn.classList.add('selected');
             addSelectedCat = btn.dataset.cat;
@@ -999,8 +1019,10 @@ function attachAddHandlers() {
             });
             state.transactions.unshift(tx);
             state.typeFilter = state.addType; // сразу показываем нужный фильтр
+            haptic('success');
             goTo('history', { push: false });
         } catch (e) {
+            haptic('error');
             if (tg?.showAlert) tg.showAlert(`Ошибка: ${e.message}`);
             else alert(`Ошибка: ${e.message}`);
             if (btn) { btn.disabled = false; btn.textContent = '💾 Сохранить'; }
@@ -1204,12 +1226,23 @@ function buildPlanWidget() {
                 <div class="${colour} h-full" style="width:${pct}%"></div>
             </div>`;
     };
+    const isPaid = p.plan === 'premium' || p.plan === 'pro' || p.plan === 'owner';
+    const widgetBg = p.plan === 'pro'
+        ? 'radial-gradient(120% 100% at 0% 0%, #f59e0b 0%, #b45309 50%, #6b3a08 100%)'
+        : p.plan === 'owner'
+            ? 'radial-gradient(120% 100% at 0% 0%, #fbbf24 0%, #b45309 55%, #4c1d0a 100%)'
+            : 'radial-gradient(120% 100% at 0% 0%, #8b5cf6 0%, #6d28d9 45%, #4c1d95 100%)';
+    const iconWrap = isPaid
+        ? 'background:rgba(252,211,77,0.18);color:#fcd34d'
+        : 'background:rgba(255,255,255,0.18);color:#fff';
     return `
-        <div id="plan-widget" class="bg-gradient-to-br from-indigo-700 to-indigo-900 rounded-2xl
-                                     p-4 text-white shadow-md mb-4 cursor-pointer">
-            <div class="flex items-center justify-between mb-3">
+        <div id="plan-widget" class="rounded-2xl p-4 text-white mb-4 cursor-pointer relative overflow-hidden"
+             style="background:${widgetBg}">
+            <div class="absolute -top-12 -right-8 w-32 h-32 rounded-full" style="background:rgba(255,255,255,0.06);filter:blur(2px)"></div>
+            <div class="absolute -bottom-14 -left-6 w-28 h-28 rounded-full" style="background:rgba(255,255,255,0.04);filter:blur(2px)"></div>
+            <div class="relative flex items-center justify-between mb-3">
                 <div class="flex items-center gap-3">
-                    <div class="w-9 h-9 bg-white/15 rounded-lg flex items-center justify-center">
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center" style="${iconWrap}">
                         ${icon(v.iconName, 'w-5 h-5')}
                     </div>
                     <div>
@@ -1219,14 +1252,17 @@ function buildPlanWidget() {
                 </div>
                 <span class="text-white/80 text-xs flex items-center gap-1">Подробнее ${icon('chevron-right', 'w-3 h-3')}</span>
             </div>
-            ${lineHTML('Транзакции', tx)}
-            ${lineHTML('Фото чека', ph)}
-            ${lineHTML('AI-финансист', ai)}
+            <div class="relative">
+                ${lineHTML('Транзакции', tx)}
+                ${lineHTML('Фото чека', ph)}
+                ${lineHTML('AI-финансист', ai)}
+            </div>
         </div>`;
 }
 
 function attachPlanWidgetHandlers() {
     document.getElementById('plan-widget')?.addEventListener('click', () => {
+        haptic('light');
         goTo('plan');
     });
 }
@@ -1252,24 +1288,26 @@ function buildPlan() {
                 </div>`;
         }
         const pct = Math.min(100, Math.round((u.used / u.limit) * 100));
-        const colour = pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-indigo-500';
+        const barColour = pct >= 90
+            ? 'var(--negative)'
+            : pct >= 60 ? '#f59e0b' : 'var(--accent)';
         return `
-            <div class="py-3 border-b border-gray-100">
+            <div class="py-3" style="border-bottom:1px solid var(--border)">
                 <div class="flex justify-between items-center mb-1.5">
-                    <span class="text-gray-700">${label}</span>
-                    <span class="text-sm font-semibold text-gray-900">${u.used}/${u.limit} ${period}</span>
+                    <span style="color:var(--text)">${label}</span>
+                    <span class="text-sm font-semibold tabular-nums" style="color:var(--text)">${u.used}/${u.limit} <span style="color:var(--text-muted)">${period}</span></span>
                 </div>
-                <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div class="${colour} h-full" style="width:${pct}%"></div>
+                <div class="h-1.5 rounded-full overflow-hidden" style="background:var(--surface-2)">
+                    <div class="h-full rounded-full" style="width:${pct}%;background:${barColour}"></div>
                 </div>
             </div>`;
     };
 
     const limits = p.limits || {};
     const staticRow = (label, value) => `
-        <div class="flex justify-between items-center py-2.5 border-b border-gray-100">
-            <span class="text-gray-700">${label}</span>
-            <span class="text-sm font-semibold text-gray-900">${value}</span>
+        <div class="flex justify-between items-center py-2.5" style="border-bottom:1px solid var(--border)">
+            <span style="color:var(--text)">${label}</span>
+            <span class="text-sm font-semibold" style="color:var(--text)">${value}</span>
         </div>`;
 
     const upgradeBtn = p.plan === 'pro' ? '' : (() => {
@@ -1366,6 +1404,7 @@ function buildPlan() {
 
 function attachPlanHandlers() {
     document.getElementById('open-upgrade-btn')?.addEventListener('click', () => {
+        haptic('medium');
         goTo('upgrade');
     });
 
@@ -1390,6 +1429,7 @@ function attachPlanHandlers() {
     const link = state.plan?.referral?.invite_link;
     if (link) {
         document.getElementById('share-referral-btn')?.addEventListener('click', () => {
+            haptic('medium');
             const text = encodeURIComponent(
                 `Веду учёт трат через AI-Финансиста. Кидаешь ему «250 на обед» — он сам разбирает. ` +
                 `Открой по ссылке — нам обоим дадут 7 дней Premium бесплатно.`,
@@ -1401,8 +1441,10 @@ function attachPlanHandlers() {
         document.getElementById('copy-referral-btn')?.addEventListener('click', async () => {
             try {
                 await navigator.clipboard.writeText(link);
+                haptic('success');
                 if (tg?.showAlert) tg.showAlert('Ссылка скопирована');
             } catch {
+                haptic('error');
                 if (tg?.showAlert) tg.showAlert('Не удалось скопировать. Скопируй вручную из /invite в боте.');
             }
         });
@@ -1497,6 +1539,7 @@ function attachUpgradeHandlers() {
     });
     document.querySelectorAll('.upgrade-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
+            haptic('medium');
             const tier = btn.dataset.tier;
 
             btn.disabled = true;
