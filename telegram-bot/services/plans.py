@@ -60,7 +60,7 @@ LIMITS: dict[str, dict] = {
     },
     PLAN_PREMIUM: {
         "transactions_per_day":    17,
-        "ai_questions_per_month":  300,
+        "ai_questions_per_month":  50,
         "voice_per_month":         60,
         "photo_per_month":         30,
         "history_days":            365,
@@ -72,7 +72,7 @@ LIMITS: dict[str, dict] = {
     },
     PLAN_PRO: {
         "transactions_per_day":    100,
-        "ai_questions_per_month":  1500,
+        "ai_questions_per_month":  150,
         "voice_per_month":         200,
         "photo_per_month":         150,
         "history_days":            730,
