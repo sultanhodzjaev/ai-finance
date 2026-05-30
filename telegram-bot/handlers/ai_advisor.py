@@ -115,9 +115,16 @@ async def handle_advisor_question(message: Message, state: FSMContext):
         await message.answer("⏳ Gemini перегружен запросами, подожди 30 секунд и попробуй снова.")
         await state.clear()
         return
-    except Exception:
+    except Exception as e:
+        # Раньше catch проглатывал ошибку без следа — теперь оставляем traceback,
+        # чтобы понимать что упало (timeout/5xx/safety filter/etc).
+        logger.exception("ask_financial_advisor failed for user=%s question=%r: %s",
+                         user_id, clean_text[:120], e)
         await thinking_msg.delete()
-        await message.answer("Что-то пошло не так с AI. Попробуй ещё раз через минуту")
+        await message.answer(
+            "Не получилось ответить — Gemini не отозвался или прислал ошибку. "
+            "Попробуй переформулировать вопрос или повтори через минуту."
+        )
         await state.clear()
         return
 
