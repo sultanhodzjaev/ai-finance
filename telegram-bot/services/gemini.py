@@ -366,9 +366,11 @@ def _compute_metrics(transactions: list, currency: str, period_days: int = 30) -
     Это предобработка ДО Gemini: LLM получает уже посчитанные цифры и работает
     как formatter+writer, а не считает что-то сам (что у него получается плохо).
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    now = datetime.now()
+    # Supabase возвращает timestamptz → datetime с tzinfo. Сравниваем в UTC,
+    # naive-datetime'ы из миграционных/тестовых данных нормализуем ниже.
+    now = datetime.now(timezone.utc)
     period_start = now - timedelta(days=period_days)
     prev_start = now - timedelta(days=period_days * 2)
 
@@ -383,6 +385,10 @@ def _compute_metrics(transactions: list, currency: str, period_days: int = 30) -
             dt = datetime.fromisoformat(t["datetime"])
         except Exception:
             continue
+        # Если запись без tz (naive) — считаем что это UTC, чтобы можно было
+        # сравнивать с now (aware). Без этого падало TypeError.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
 
         amt = float(t.get("amount") or 0)
         tx_type = t.get("type", "expense")
