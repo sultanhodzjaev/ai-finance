@@ -1656,6 +1656,7 @@ function buildCurrencyPicker() {
         ['RUB', '🇷🇺 Рубль (RUB)'],
         ['UZS', '🇺🇿 Сум (UZS)'],
         ['USD', '💵 Доллар (USD)'],
+        ['EUR', '🇪🇺 Евро (EUR)'],
     ];
     const current = state.me?.currency;
     return `

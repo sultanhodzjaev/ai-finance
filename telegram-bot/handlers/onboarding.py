@@ -39,13 +39,14 @@ async def cmd_cancel(message: Message, state: FSMContext):
         await message.answer("Сейчас нет активного диалога — но ок 🙂")
 
 
-# 5 валют, заявленные на старте. KGS — дефолт для legacy-юзеров.
+# Валюты, доступные на старте. KGS — дефолт для legacy-юзеров.
 CURRENCIES: list[tuple[str, str]] = [
     ("KGS", "🇰🇬 Сом (KGS)"),
     ("KZT", "🇰🇿 Тенге (KZT)"),
     ("RUB", "🇷🇺 Рубль (RUB)"),
     ("UZS", "🇺🇿 Сум (UZS)"),
     ("USD", "💵 Доллар (USD)"),
+    ("EUR", "🇪🇺 Евро (EUR)"),
 ]
 CURRENCY_CODES = {code for code, _ in CURRENCIES}
 

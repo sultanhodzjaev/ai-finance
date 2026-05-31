@@ -16,6 +16,7 @@ TIMEZONE_OFFSETS_BY_CURRENCY: dict[str, int] = {
     "KZT": 5,   # Asia/Almaty
     "UZS": 5,   # Asia/Tashkent
     "RUB": 3,   # Europe/Moscow
+    "EUR": 1,   # Central European Time (зимнее); летом будет на час раньше
     "USD": 0,   # без надёжного маппинга — UTC
 }
 DEFAULT_OFFSET = 6  # legacy-юзеры без валюты — Бишкек, как и было раньше

@@ -58,6 +58,7 @@ CURRENCY_LABELS = {
     "RUB": "🇷🇺 Рубль (RUB)",
     "UZS": "🇺🇿 Сум (UZS)",
     "USD": "💵 Доллар (USD)",
+    "EUR": "🇪🇺 Евро (EUR)",
 }
 
 
