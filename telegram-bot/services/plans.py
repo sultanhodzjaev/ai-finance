@@ -36,7 +36,7 @@ Action = Literal["transaction", "photo", "ai_question", "voice"]
 LIMITS: dict[str, dict] = {
     PLAN_TRIAL: {
         "transactions_per_day":    14,
-        "ai_questions_per_month":  100,
+        "ai_questions_per_month":  50,
         "voice_per_month":         50,
         "photo_per_month":         30,
         "history_days":            None,         # вся за период триала
