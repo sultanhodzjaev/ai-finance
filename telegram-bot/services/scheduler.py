@@ -178,6 +178,38 @@ async def monthly_summary(bot: Bot, now_utc: datetime | None = None) -> None:
     logger.info(f"monthly_summary: sent={sent}, skipped_no_data={skipped}")
 
 
+async def onboarding_nudge(bot: Bot) -> None:
+    """
+    Пушит юзерам, которые зарегистрировались, выбрали валюту и ничего не записали,
+    короткое сообщение с примерами «попробуй прямо сейчас». Каждому шлётся ровно
+    один раз (idempotency через events.reminder_sent + metadata.kind).
+    """
+    sent = 0
+    for u in storage.find_users_for_onboarding_nudge(within_days=7, min_age_minutes=30):
+        uid = u.get("telegram_id")
+        if not uid:
+            continue
+        if storage.is_banned(uid):
+            continue
+        name = u.get("first_name") or "Друг"
+        text = (
+            f"👋 {name}, заметил что ты ещё ничего не записал.\n\n"
+            "<b>Попробуй прямо сейчас — это занимает 2 секунды:</b>\n"
+            "  • <code>250 кофе</code>\n"
+            "  • <code>такси 400</code>\n"
+            "  • <code>зарплата 50000</code>\n\n"
+            "Можно ещё <b>фото чека</b> — распознаю, или <b>голосовое</b> — продиктуй.\n\n"
+            "В Mini App потом будут графики и аналитика. Жду 👇"
+        )
+        ok = await _send_safe(bot, uid, text)
+        if ok:
+            storage.log_event(uid, "reminder_sent", {"kind": "onboarding_nudge"})
+            sent += 1
+        await asyncio.sleep(0.05)
+    if sent:
+        logger.info(f"onboarding_nudge: sent={sent}")
+
+
 async def daily_reminders(bot: Bot, now_utc: datetime | None = None) -> None:
     """Ежедневное напоминание тем, кто сегодня не записал ни одной траты.
     Фильтр по local-hour: шлём только тем, у кого сейчас DAILY_REMINDER_LOCAL_HOUR
@@ -418,6 +450,7 @@ async def scheduler_loop(bot: Bot) -> None:
             # тех, у кого нет трат сегодня; внутри функция отфильтрует по local hour.
             if last_reminder_hour_key != hour_key:
                 await daily_reminders(bot, now_utc=now_utc)
+                await onboarding_nudge(bot)  # тоже раз в час; внутри есть idempotency
                 last_reminder_hour_key = hour_key
 
             if (

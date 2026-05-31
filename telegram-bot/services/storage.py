@@ -574,6 +574,51 @@ def find_active_users(within_days: int = 14) -> list[dict]:
         return []
 
 
+def find_users_for_onboarding_nudge(within_days: int = 7, min_age_minutes: int = 30) -> list[dict]:
+    """
+    Юзеры, которым стоит напомнить «попробуй записать первую трату»:
+    - зарегистрированы за последние `within_days` дней
+    - прошло не меньше `min_age_minutes` от регистрации (чтобы не пинать сразу же
+      после /start, человек ещё ходит по меню)
+    - ни одной транзакции в БД (ever)
+    - ещё не получали nudge (event reminder_sent с metadata.kind='onboarding_nudge')
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff_old = (now - timedelta(days=within_days)).isoformat()
+    cutoff_young = (now - timedelta(minutes=min_age_minutes)).isoformat()
+    try:
+        users = (_client().table("users")
+                 .select("telegram_id,first_name,created_at")
+                 .gte("created_at", cutoff_old)
+                 .lte("created_at", cutoff_young)
+                 .execute().data) or []
+        if not users:
+            return []
+        ids = [u["telegram_id"] for u in users]
+
+        # Кто из них хоть раз что-то записал — выкидываем
+        with_tx = (_client().table("transactions").select("telegram_id")
+                   .in_("telegram_id", ids).execute().data) or []
+        with_tx_ids = {r["telegram_id"] for r in with_tx}
+
+        # Кому уже слали nudge — выкидываем (idempotency).
+        # Тип reminder_sent уже в whitelist events_type_check;
+        # отличаем разные виды по metadata.kind='onboarding_nudge'.
+        sent = (_client().table("events").select("telegram_id,metadata")
+                .eq("type", "reminder_sent").in_("telegram_id", ids).execute().data) or []
+        already_nudged = {
+            r["telegram_id"] for r in sent
+            if (r.get("metadata") or {}).get("kind") == "onboarding_nudge"
+        }
+
+        return [u for u in users if u["telegram_id"] not in with_tx_ids
+                and u["telegram_id"] not in already_nudged]
+    except Exception as e:
+        logger.error(f"find_users_for_onboarding_nudge: {e}")
+        return []
+
+
 def find_users_without_transactions_today() -> list[dict]:
     """
     Возвращает активных юзеров, которые сегодня (UTC) ещё не записали ни одной транзакции.
