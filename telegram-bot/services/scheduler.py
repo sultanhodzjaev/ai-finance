@@ -326,6 +326,24 @@ async def poll_lava_invoices(bot: Bot) -> None:
                     f"Открой /plan чтобы посмотреть остаток лимитов в любой момент."
                 )
             await _send_safe(bot, telegram_id, text)
+
+            # Дублируем оповещение админу: видеть оплаты в реальном времени важно
+            # для контроля метрик и быстрой реакции на проблемы с возвратами.
+            admin = _admin_id()
+            if admin and admin != telegram_id:
+                user = storage.get_user(telegram_id) or {}
+                uname = user.get("username") or ""
+                fname = user.get("first_name") or ""
+                handle = f"@{uname}" if uname else f"<code>{telegram_id}</code>"
+                kind = "🔄 Продление" if is_recurring else "🎉 Новая оплата"
+                await _send_safe(
+                    bot, admin,
+                    f"<b>{kind}: {title} · ${amount_int}</b>\n"
+                    f"От: {handle} ({fname or '—'})\n"
+                    f"tg: <code>{telegram_id}</code>\n"
+                    f"contract: <code>{contract_id}</code>"
+                )
+
             processed += 1
         except Exception as e:
             logger.error(f"poll_lava: process invoice {contract_id} tg={telegram_id} failed: {e}")
