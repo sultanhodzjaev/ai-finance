@@ -517,12 +517,21 @@ def parse_period_from_question(question: str) -> tuple[int, str]:
     return 30, "за месяц"
 
 
-async def generate_weekly_summary(currency: str, transactions: list, first_name: str = "") -> str | None:
+async def _generate_period_summary(
+    currency: str,
+    transactions: list,
+    *,
+    period_days: int,
+    header: str,
+    prev_period_word: str,
+    next_period_word: str,
+    first_name: str = "",
+) -> str | None:
     """
-    Готовит еженедельный summary для пуш-рассылки. Период = 7 дней.
-    Возвращает HTML-текст или None если данных за неделю нет (пропускаем юзера).
+    Общая функция для weekly/monthly пушей. Возвращает HTML или None
+    (None = за период не было ни одной транзакции, юзера пропускаем).
     """
-    metrics = _compute_metrics(transactions, currency, period_days=7)
+    metrics = _compute_metrics(transactions, currency, period_days=period_days)
     if not metrics["has_data"]:
         return None
 
@@ -530,23 +539,23 @@ async def generate_weekly_summary(currency: str, transactions: list, first_name:
     name_hint = first_name.strip() or "Друг"
 
     prompt = (
-        "Ты — личный AI-финансист. Сформулируй короткий еженедельный summary для пуш-сообщения "
+        "Ты — личный AI-финансист. Сформулируй короткий summary для пуш-сообщения "
         "в Telegram. Тёплый тон, на 'ты'. Используй ТОЛЬКО цифры из metrics_json.\n\n"
         "ФОРМАТ — строго HTML, такой структуры:\n\n"
-        f"<b>📊 Итоги недели, {name_hint}</b>\n"
+        f"<b>{header}, {name_hint}</b>\n"
         "{period_label}\n\n"
         "Доход: <b>{total_income} {currency}</b> · Расход: <b>{total_expense} {currency}</b> · "
         "Остаток: <b>{balance:+d} {currency}</b>\n"
-        "{ если expense_delta_pct != null: «📈 Расходы +X% к прошлой неделе» или «📉 −X%» }\n\n"
+        f"{{ если expense_delta_pct != null: «📈 Расходы +X% к {prev_period_word}» или «📉 −X%» }}\n\n"
         "<b>Куда уходило</b> (топ-3):\n"
         "  для каждой top_categories[:3]: «<b>Название</b> — <b>amount {currency}</b> ({pct}%)»\n"
-        "  + <i>+X%</i> или <i>−X%</i> к прошлой неделе, если delta_pct_vs_prev есть.\n\n"
+        f"  + <i>+X%</i> или <i>−X%</i> к {prev_period_word}, если delta_pct_vs_prev есть.\n\n"
         "{ если anomalies есть, секция:\n"
         "<b>Что выбилось:</b>\n"
         "  для каждой: «⚡ <b>amount {currency}</b> — description (date). В X× больше среднего.»\n"
         "}\n\n"
         "{ если streak_days >= 3: «🔥 Streak {streak_days} дней подряд» }\n\n"
-        "<b>Что сделать на следующей неделе:</b>\n"
+        f"<b>Что сделать на {next_period_word}:</b>\n"
         "  Одно конкретное действие с цифрой экономии. НЕ «попробуй». "
         "  Привязывайся к категории с большим ростом или к аномалии.\n\n"
         "В конце — короткая строка-CTA: «Спросить детальнее — /ask».\n\n"
@@ -562,10 +571,40 @@ async def generate_weekly_summary(currency: str, transactions: list, first_name:
     )
 
     try:
-        return await _generate([{"parts": [{"text": prompt}]}])
+        # thinking_budget=512 — даём «подумать» (формулировка тоньше),
+        # max=3000 — хватает на полный HTML; экономия на reasoning.
+        return await _generate(
+            [{"parts": [{"text": prompt}]}],
+            max_output_tokens=3000,
+            thinking_budget=512,
+        )
     except Exception as e:
-        logger.error(f"generate_weekly_summary error: {e}")
+        logger.error(f"period_summary error (period_days={period_days}): {e}")
         raise
+
+
+async def generate_weekly_summary(currency: str, transactions: list, first_name: str = "") -> str | None:
+    """Еженедельный пуш, период = 7 дней."""
+    return await _generate_period_summary(
+        currency, transactions,
+        period_days=7,
+        header="📊 Итоги недели",
+        prev_period_word="прошлой неделе",
+        next_period_word="следующей неделе",
+        first_name=first_name,
+    )
+
+
+async def generate_monthly_summary(currency: str, transactions: list, first_name: str = "") -> str | None:
+    """Месячный пуш, период = 30 дней. Шлём в первый день месяца."""
+    return await _generate_period_summary(
+        currency, transactions,
+        period_days=30,
+        header="📅 Итоги месяца",
+        prev_period_word="прошлому месяцу",
+        next_period_word="следующий месяц",
+        first_name=first_name,
+    )
 
 
 async def ask_financial_advisor(

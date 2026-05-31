@@ -131,6 +131,52 @@ async def weekly_summary(bot: Bot, now_utc: datetime | None = None) -> None:
     logger.info(f"weekly_summary: sent={sent}, skipped_no_data={skipped}")
 
 
+async def monthly_summary(bot: Bot, now_utc: datetime | None = None) -> None:
+    """
+    Раз в месяц шлёт активным юзерам итоги последних 30 дней.
+    По смыслу аналогична weekly_summary, но за месяц и с другим заголовком.
+    Триггер — 1-е число месяца, локальные WEEKLY_SUMMARY_LOCAL_HOUR.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    sent = 0
+    skipped = 0
+    for u in storage.find_active_users(within_days=45):
+        uid = u.get("telegram_id")
+        if not uid:
+            continue
+        if storage.is_banned(uid):
+            continue
+        currency = u.get("currency") or "KGS"
+        if _local_hour_for(currency, now_utc) != WEEKLY_SUMMARY_LOCAL_HOUR:
+            continue
+        first_name = u.get("first_name") or ""
+        try:
+            txs = storage.get_transactions(uid, since_days=60)  # запас на prev-period delta
+            html = await gemini.generate_monthly_summary(currency, txs, first_name=first_name)
+        except Exception as e:
+            logger.warning(f"monthly_summary build for {uid} failed: {e}")
+            continue
+        if not html:
+            skipped += 1
+            continue
+
+        cleaned = html.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0].rstrip()
+
+        try:
+            await bot.send_message(uid, cleaned, parse_mode="HTML", disable_web_page_preview=True)
+            sent += 1
+            storage.log_event(uid, "monthly_summary_sent", {})
+        except Exception as e:
+            logger.warning(f"monthly_summary send to {uid} failed: {e}")
+        await asyncio.sleep(0.05)
+
+    logger.info(f"monthly_summary: sent={sent}, skipped_no_data={skipped}")
+
+
 async def daily_reminders(bot: Bot, now_utc: datetime | None = None) -> None:
     """Ежедневное напоминание тем, кто сегодня не записал ни одной траты.
     Фильтр по local-hour: шлём только тем, у кого сейчас DAILY_REMINDER_LOCAL_HOUR
@@ -337,6 +383,7 @@ async def scheduler_loop(bot: Bot) -> None:
     logger.info("scheduler_loop: started")
     last_reminder_hour_key: str | None = None
     last_weekly_hour_key: str | None = None
+    last_monthly_hour_key: str | None = None
 
     while True:
         try:
@@ -360,6 +407,13 @@ async def scheduler_loop(bot: Bot) -> None:
             ):
                 await weekly_summary(bot, now_utc=now_utc)
                 last_weekly_hour_key = hour_key
+
+            # monthly: первый день месяца, фильтр по local hour внутри функции.
+            # day==1 в UTC — для USD-юзеров (offset=0) совпадает с локальным 1-м,
+            # для остальных (offset 3–6 ч) пуш придёт уже 1-го числа их локали.
+            if now_utc.day == 1 and last_monthly_hour_key != hour_key:
+                await monthly_summary(bot, now_utc=now_utc)
+                last_monthly_hour_key = hour_key
         except Exception as e:
             logger.error(f"scheduler_loop tick failed: {e}")
 
