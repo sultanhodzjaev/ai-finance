@@ -211,8 +211,9 @@ async def cmd_upgrade(message: Message):
             _build_tier_summary(plans.PLAN_PRO),
         ]
     parts.append(
-        "\n💳 Оплата картой через Lava.top. Подписка автопродлевается "
-        "каждый месяц, можно отменить в любой момент."
+        "\n🅿️ Оплата через PayPal (картой Visa/MC/Amex без аккаунта PayPal) "
+        "через Lava.top. Подписка автопродлевается каждый месяц, можно "
+        "отменить в любой момент."
     )
 
     await message.answer(

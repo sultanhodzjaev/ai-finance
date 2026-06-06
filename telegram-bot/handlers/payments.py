@@ -60,11 +60,13 @@ async def _start_lava_checkout(callback: CallbackQuery, tier: str) -> None:
     from handlers.plan import _build_tier_summary
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить ${price}/мес", url=payment_url)],
+        [InlineKeyboardButton(text=f"🅿️ Оплатить через PayPal — ${price}/мес", url=payment_url)],
     ])
     await callback.message.answer(
         f"{_build_tier_summary(tier)}\n\n"
-        f"Жми кнопку ниже, оплати картой — после оплаты бот сам активирует "
+        f"Жми кнопку ниже — откроется PayPal. <b>Оплатить можно обычной картой "
+        f"Visa/MC/Amex без аккаунта PayPal</b>: на странице PayPal жми "
+        f"«Pay with Debit or Credit Card». После оплаты бот сам активирует "
         f"подписку. Списание каждый месяц автоматически, можно отменить в "
         f"любой момент.\n\n"
         f"⏱ <i>Подтверждение придёт в течение 1 минуты после оплаты.</i>",

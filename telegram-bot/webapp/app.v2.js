@@ -1481,7 +1481,7 @@ function buildUpgrade() {
                </button>`
             : `<button class="upgrade-btn w-full bg-indigo-600 text-white py-2.5 rounded-xl font-semibold active:scale-95 transition"
                        data-tier="${key}">
-                   Оформить — $${price.usd}/мес
+                   🅿️ Оплатить через PayPal — $${price.usd}/мес
                </button>`;
         return `
             <div class="bg-white rounded-2xl p-5 shadow-sm ${ringClass} mb-3 relative">
@@ -1532,7 +1532,7 @@ function buildUpgrade() {
             ], false)}
 
             <p class="text-xs text-gray-400 text-center mt-4">
-                Оплата картой через Lava.top. Подписка продлевается автоматически каждый месяц, можно отменить в любой момент.
+                Оплата через PayPal (картой Visa/MC/Amex без аккаунта PayPal) через Lava.top. Подписка продлевается автоматически каждый месяц, можно отменить в любой момент.
             </p>
         </div>`;
 }
