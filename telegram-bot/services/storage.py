@@ -261,6 +261,28 @@ def count_transactions_today(telegram_id: int, source: str | None = None) -> int
         return 0
 
 
+def count_transactions_today_in_sources(telegram_id: int, sources: list[str]) -> int:
+    """Как count_transactions_today, но фильтрует по списку source'ов сразу.
+    Нужно, чтобы лимит на «текстовые траты» одинаково учитывал и чат-бот
+    (source='text'), и Mini App (source='miniapp') — иначе фронт обходит лимит."""
+    if not sources:
+        return 0
+    try:
+        res = (
+            _client()
+            .table("transactions")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .gte("created_at", _today_start_utc())
+            .in_("source", sources)
+            .execute()
+        )
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_transactions_today_in_sources({telegram_id}, {sources}): {e}")
+        return 0
+
+
 def count_events_today(telegram_id: int, event_type: str) -> int:
     """Сколько событий заданного типа у юзера за сегодня (UTC)."""
     try:
@@ -361,6 +383,26 @@ def count_transactions_this_month(telegram_id: int, source: str | None = None) -
         return res.count or 0
     except Exception as e:
         logger.error(f"count_transactions_this_month({telegram_id}, {source}): {e}")
+        return 0
+
+
+def count_transactions_this_month_in_sources(telegram_id: int, sources: list[str]) -> int:
+    """Месячная версия count_transactions_today_in_sources."""
+    if not sources:
+        return 0
+    try:
+        res = (
+            _client()
+            .table("transactions")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .gte("created_at", _month_start_utc())
+            .in_("source", sources)
+            .execute()
+        )
+        return res.count or 0
+    except Exception as e:
+        logger.error(f"count_transactions_this_month_in_sources({telegram_id}, {sources}): {e}")
         return 0
 
 
